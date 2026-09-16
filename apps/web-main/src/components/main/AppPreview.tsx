@@ -1,158 +1,318 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import Image from 'next/image';
-import { MapPin, Bell, Search, Home, ShoppingBag, User, Star, CheckCircle, ChevronRight, Zap, Pause, Navigation } from 'lucide-react';
+import { Bell, Home, ShoppingBag, User, Navigation, Pause, RefreshCw, ArrowUpRight } from 'lucide-react';
 
-// A pixel-faithful replica of the Dabzzo dashboard screen
+/* ─── Shared: Bottom Navigation ─────────────────────────────────── */
+
+const NAV_ITEMS = [
+  { key: 'home', icon: Home, label: 'Home' },
+  { key: 'orders', icon: ShoppingBag, label: 'Orders' },
+  { key: 'profile', icon: User, label: 'Profile' },
+] as const;
+
+function BottomNav({ active }: { active: string }) {
+  return (
+    <nav className="mt-auto flex items-center justify-between border-t border-slate-200/60 bg-white px-6 py-2">
+      {NAV_ITEMS.map(({ key, icon: Icon, label }) => {
+        const isActive = key === active;
+        return (
+          <div key={key} className="flex flex-col items-center gap-1 py-0.5">
+            <Icon
+              className={`h-4 w-4 transition-colors duration-150 ${isActive ? 'text-brand' : 'text-slate-400'}`}
+              strokeWidth={isActive ? 2.4 : 1.8}
+            />
+            <span
+              className={`text-[9px] font-medium leading-none ${isActive ? 'text-brand' : 'text-slate-400'}`}
+            >
+              {label}
+            </span>
+            {isActive && <span className="mt-0.5 h-1 w-1 rounded-full bg-brand" />}
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
+
+/* ─── Dashboard Screen (Center) ─────────────────────────────────── */
+
 function DashboardScreen() {
   return (
-    <div className="w-full h-full bg-[#FEFCE8] flex flex-col text-slate-900 overflow-hidden select-none">
-      {/* Warm Amber/Gold Header */}
-      <div className="bg-gradient-to-r from-amber-600 to-amber-700 px-4 pt-4 pb-8 flex flex-col gap-1">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-1.5 bg-white/20 rounded-full px-2.5 py-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-            <span className="text-white text-[9px] font-bold">Near You</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="bg-white/20 backdrop-blur-xs rounded-full px-3 py-1 flex items-center">
-              <span className="text-white text-[10px] font-extrabold tracking-tight">Dabzzo.in</span>
-            </div>
-            <Bell className="w-4 h-4 text-white" />
-          </div>
+    <div className="w-full h-full bg-[#F8F7F4] flex flex-col text-slate-900 overflow-hidden select-none">
+      {/* Header */}
+      <header className="flex items-center justify-between px-5 pt-6 pb-4">
+        <div>
+          <p className="text-[11px] text-slate-500 font-medium">Good afternoon</p>
+          <h2 className="mt-0.5 text-[17px] font-bold text-slate-900 tracking-tight leading-snug">
+            Riya
+          </h2>
         </div>
-        <p className="text-amber-100 text-[9px] font-semibold uppercase tracking-widest">Good afternoon, test</p>
-        <h2 className="text-white text-lg font-black leading-tight">Fresh Home<br />Tiffins<br />Delivered Daily.</h2>
-      </div>
-
-      {/* Live Order Card */}
-      <div className="mx-3 -mt-5 bg-slate-900 rounded-2xl p-3 shadow-xl z-10">
-        <div className="flex items-center justify-between mb-1.5">
-          <div className="flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-emerald-400 text-[8px] font-black uppercase tracking-widest">Live Order Status</span>
-          </div>
-          <span className="text-white/50 text-[8px] font-semibold">Today</span>
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100">
+          <Bell className="h-3.5 w-3.5 text-slate-400" strokeWidth={2} />
         </div>
-        <p className="text-white text-xs font-bold mb-0.5">Your kitchen</p>
-        <p className="text-white/60 text-[8px] mb-2">Status: Pending</p>
-        <div className="w-full bg-amber-600 rounded-lg py-1.5 text-center">
-          <span className="text-white text-[9px] font-black tracking-wide">TRACK LIVE DELIVERY</span>
-        </div>
-      </div>
+      </header>
 
-      {/* Search */}
-      <div className="mx-3 mt-3 flex items-center gap-2 bg-white rounded-xl px-3 py-2 shadow-xs border border-slate-100">
-        <Search className="w-3 h-3 text-slate-400" />
-        <span className="text-slate-400 text-[9px]">Explore now...</span>
-      </div>
-
-      {/* Filter pills */}
-      <div className="flex gap-1.5 px-3 mt-2 overflow-x-auto scrollbar-none">
-        {['All','Home Style','North Indian','South Indian','Jain'].map((cat, i) => (
-          <span key={cat} className={`shrink-0 text-[8px] font-bold px-2.5 py-1 rounded-full ${i === 0 ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>
-            {cat}
+      {/* ── Primary summary card ── */}
+      <div className="mx-4 rounded-2xl bg-white p-4 ring-1 ring-slate-200/60 shadow-[0_2px_12px_rgba(15,23,42,0.04)]">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-slate-500 font-medium">Live order</span>
+          <span className="flex items-center gap-1.5 text-[10px] font-medium text-emerald-600">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            Preparing
           </span>
-        ))}
-      </div>
-
-      {/* Quick Actions */}
-      <div className="grid grid-cols-3 gap-2 px-3 mt-3">
-        {[
-          { icon: Zap, label: 'Menu Swaps', sub: 'Switch kitchen anytime' },
-          { icon: Pause, label: 'Easy Pause', sub: 'Save credits when away' },
-          { icon: Navigation, label: 'Live Track', sub: 'Real-time GPS delivery' },
-        ].map(({ icon: Icon, label, sub }) => (
-          <div key={label} className="bg-white rounded-xl p-2 shadow-xs border border-slate-100 text-center">
-            <div className="w-6 h-6 bg-amber-500/10 rounded-lg flex items-center justify-center mx-auto mb-1">
-              <Icon className="w-3 h-3 text-amber-600" />
-            </div>
-            <p className="text-[8px] font-black text-slate-800 leading-none">{label}</p>
-            <p className="text-[6px] text-slate-400 mt-0.5 leading-tight">{sub}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Vendors */}
-      <div className="px-3 mt-3 flex items-center justify-between">
-        <span className="text-[10px] font-black text-slate-800">Nearest Vendors</span>
-        <div className="flex items-center gap-1 text-[8px] text-slate-400">
-          <span className="text-amber-600 font-bold">↺ 1 FOUND</span>
+        </div>
+        <p className="mt-2.5 text-[13px] font-semibold text-slate-900 leading-snug">
+          Lunch — Dal Rice + Sabzi
+        </p>
+        <p className="mt-1 text-[11px] text-slate-500">Arriving 11:30 · Swad Kitchen</p>
+        <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2.5">
+          <span className="text-[10px] text-slate-400">Today</span>
+          <span className="flex items-center gap-0.5 text-[11px] font-semibold text-brand">
+            Track
+            <ArrowUpRight className="h-2.5 w-2.5" strokeWidth={2.5} />
+          </span>
         </div>
       </div>
-      <div className="mx-3 mt-2 bg-white rounded-2xl p-3 shadow-xs border border-slate-100 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center">
-            <span className="text-lg">🍱</span>
-          </div>
-          <div>
-            <div className="flex items-center gap-1 mb-0.5">
-              <span className="text-[8px] font-black text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5">✓ VERIFIED</span>
+
+      {/* ── Key metrics strip ── */}
+      <div className="mx-4 mt-3 rounded-2xl bg-white p-3 ring-1 ring-slate-200/60 shadow-[0_2px_12px_rgba(15,23,42,0.04)]">
+        <div className="grid grid-cols-4 divide-x divide-slate-200/70 text-center">
+          {[
+            { value: '28', label: 'Meals' },
+            { value: '14', label: 'Lunches' },
+            { value: '14', label: 'Dinners' },
+            { value: '₹120', label: 'Credits' },
+          ].map((m) => (
+            <div key={m.label} className="px-1.5">
+              <p className="text-[14px] font-bold text-slate-900 leading-none">{m.value}</p>
+              <p className="mt-1 text-[9px] text-slate-500 leading-none">{m.label}</p>
             </div>
-            <div className="flex items-center gap-0.5">
-              <Star className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
-              <span className="text-[8px] font-bold text-slate-700">4.5</span>
-            </div>
-          </div>
+          ))}
         </div>
-        <ChevronRight className="w-3 h-3 text-slate-400" />
       </div>
 
-      {/* Bottom Nav */}
-      <div className="mt-auto border-t border-slate-100 bg-white flex items-center justify-around px-4 py-2">
-        {[{ icon: Home, label: 'HOME', active: true }, { icon: ShoppingBag, label: 'ORDERS', active: false }, { icon: User, label: 'PROFILE', active: false }].map(({ icon: Icon, label, active }) => (
-          <div key={label} className="flex flex-col items-center gap-0.5">
-            <Icon className={`w-4 h-4 ${active ? 'text-amber-600' : 'text-slate-400'}`} />
-            <span className={`text-[7px] font-black ${active ? 'text-amber-600' : 'text-slate-400'}`}>{label}</span>
-            {active && <div className="w-1 h-1 rounded-full bg-amber-600" />}
+      {/* ── Today's meals — rows, no nested cards ── */}
+      <section className="mt-5 px-5">
+        <h3 className="text-[11px] font-semibold text-slate-700">Today&apos;s meals</h3>
+        <div className="mt-2.5 divide-y divide-slate-200/60">
+          <div className="flex items-center justify-between py-2">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              <span className="text-[11px] font-medium text-slate-800">
+                Lunch — Dal Rice + Sabzi
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500">Delivered</span>
           </div>
-        ))}
-      </div>
+          <div className="flex items-center justify-between py-2">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+              <span className="text-[11px] font-medium text-slate-800">
+                Dinner — Roti + Paneer
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500">Scheduled</span>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Quick actions — flat row, no boxes ── */}
+      <section className="mt-5 px-5">
+        <h3 className="text-[11px] font-semibold text-slate-700">Quick actions</h3>
+        <div className="mt-2 grid grid-cols-3 divide-x divide-slate-200/60">
+          {[
+            { icon: RefreshCw, label: 'Swap' },
+            { icon: Pause, label: 'Pause' },
+            { icon: Navigation, label: 'Track', active: true },
+          ].map(({ icon: Icon, label, active }) => (
+            <div key={label} className="flex flex-col items-center gap-1.5 py-2.5">
+              <Icon
+                className={`h-4 w-4 ${active ? 'text-brand' : 'text-slate-400'}`}
+                strokeWidth={2}
+              />
+              <span
+                className={`text-[10px] font-medium ${active ? 'text-brand' : 'text-slate-500'}`}
+              >
+                {label}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <BottomNav active="home" />
     </div>
   );
 }
 
-// Orders screen replica
+/* ─── Orders Screen (Left) ──────────────────────────────────────── */
+
 function OrdersScreen() {
   return (
-    <div className="w-full h-full bg-[#FEFCE8] flex flex-col text-slate-900 overflow-hidden select-none">
-      <div className="bg-gradient-to-r from-amber-600 to-amber-700 px-4 pt-5 pb-5">
-        <p className="text-amber-100 text-[9px] font-semibold uppercase tracking-widest mb-1">Your Orders</p>
-        <h2 className="text-white text-xl font-black">Subscription Active</h2>
-      </div>
+    <div className="w-full h-full bg-[#F8F7F4] flex flex-col text-slate-900 overflow-hidden select-none">
+      <header className="px-5 pt-6 pb-4">
+        <p className="text-[11px] text-slate-500 font-medium">Your orders</p>
+        <h2 className="mt-0.5 text-[17px] font-bold text-slate-900 tracking-tight leading-snug">
+          Subscription active
+        </h2>
+      </header>
 
-      <div className="flex-1 px-3 pt-4 space-y-3 overflow-hidden">
-        {[
-          { status: 'Delivered', meal: 'Dal Rice + Sabzi', date: 'Today, Lunch', color: 'bg-emerald-50 border-emerald-200', badge: 'bg-emerald-500' },
-          { status: 'Scheduled', meal: 'Roti + Paneer', date: 'Tomorrow, Lunch', color: 'bg-amber-50 border-amber-200', badge: 'bg-amber-500' },
-          { status: 'Scheduled', meal: 'Veg Thali', date: 'Wed, Lunch', color: 'bg-slate-50 border-slate-200', badge: 'bg-slate-400' },
-        ].map((order, i) => (
-          <div key={i} className={`${order.color} border rounded-2xl p-3`}>
-            <div className="flex items-start justify-between mb-1">
-              <p className="text-[10px] font-black text-slate-800">{order.meal}</p>
-              <span className={`${order.badge} text-white text-[7px] font-bold px-2 py-0.5 rounded-full`}>{order.status}</span>
+      {/* Today */}
+      <section className="px-5">
+        <h3 className="text-[10px] font-semibold text-slate-500">Today</h3>
+        <div className="mt-2.5 divide-y divide-slate-200/60">
+          <div className="flex items-center justify-between py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              <span className="text-[11px] font-medium text-slate-800">
+                Lunch — Dal Rice + Sabzi
+              </span>
             </div>
-            <p className="text-[8px] text-slate-500">{order.date}</p>
+            <span className="text-[10px] font-medium text-emerald-600">Delivered</span>
           </div>
-        ))}
-      </div>
+          <div className="flex items-center justify-between py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+              <span className="text-[11px] font-medium text-slate-800">
+                Dinner — Roti + Paneer
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500">Scheduled</span>
+          </div>
+        </div>
+      </section>
 
-      {/* Bottom Nav */}
-      <div className="mt-auto border-t border-slate-100 bg-white flex items-center justify-around px-4 py-2">
-        {[{ icon: Home, label: 'HOME', active: false }, { icon: ShoppingBag, label: 'ORDERS', active: true }, { icon: User, label: 'PROFILE', active: false }].map(({ icon: Icon, label, active }) => (
-          <div key={label} className="flex flex-col items-center gap-0.5">
-            <Icon className={`w-4 h-4 ${active ? 'text-amber-600' : 'text-slate-400'}`} />
-            <span className={`text-[7px] font-black ${active ? 'text-amber-600' : 'text-slate-400'}`}>{label}</span>
-            {active && <div className="w-1 h-1 rounded-full bg-amber-600" />}
+      {/* Tomorrow */}
+      <section className="mt-6 px-5">
+        <h3 className="text-[10px] font-semibold text-slate-500">Tomorrow</h3>
+        <div className="mt-2.5 divide-y divide-slate-200/60">
+          <div className="flex items-center justify-between py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-300" />
+              <span className="text-[11px] font-medium text-slate-800">
+                Lunch — Veg Thali
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500">Scheduled</span>
           </div>
-        ))}
-      </div>
+          <div className="flex items-center justify-between py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-300" />
+              <span className="text-[11px] font-medium text-slate-800">
+                Dinner — Egg Curry + Roti
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-500">Scheduled</span>
+          </div>
+        </div>
+      </section>
+
+      <BottomNav active="orders" />
     </div>
   );
 }
 
-function PhoneMockup({ children, rotate = 0, delay = 0, zIndex = 10 }: { children: React.ReactNode; rotate?: number; delay?: number; zIndex?: number }) {
+/* ─── Plan & Pricing Screen (Right) ─────────────────────────────── */
+
+function PlanScreen() {
+  return (
+    <div className="w-full h-full bg-[#F8F7F4] flex flex-col text-slate-900 overflow-hidden select-none">
+      <header className="px-5 pt-6 pb-4">
+        <p className="text-[11px] text-slate-500 font-medium">Your plan</p>
+        <h2 className="mt-0.5 text-[17px] font-bold text-slate-900 tracking-tight leading-snug">
+          Weekly · Lunches &amp; dinners
+        </h2>
+      </header>
+
+      {/* ── Thali price ── */}
+      <div className="mx-4 rounded-2xl bg-white p-4 ring-1 ring-slate-200/60 shadow-[0_2px_12px_rgba(15,23,42,0.04)]">
+        <p className="text-[10px] text-slate-500 font-medium">Thali price</p>
+        <div className="mt-2 flex items-baseline gap-2">
+          <span className="text-[22px] font-bold text-brand leading-none">₹124</span>
+          <span className="text-[11px] text-slate-500">per meal</span>
+        </div>
+
+        <div className="my-3 h-px bg-slate-100" />
+
+        <div className="grid grid-cols-3 divide-x divide-slate-200/60 text-center">
+          <div className="px-1">
+            <p className="text-[9px] text-slate-500">Base</p>
+            <p className="mt-0.5 text-[11px] font-semibold text-slate-800">₹80</p>
+          </div>
+          <div className="px-1">
+            <p className="text-[9px] text-slate-500">Portion</p>
+            <p className="mt-0.5 text-[11px] font-semibold text-slate-800">+₹44</p>
+          </div>
+          <div className="px-1">
+            <p className="text-[9px] text-slate-500">Effective</p>
+            <p className="mt-0.5 text-[11px] font-bold text-brand">₹124</p>
+          </div>
+        </div>
+
+        <div className="my-3 h-px bg-slate-100" />
+        <p className="text-[10px] text-slate-500">Rice · Dal · Roti · Sabji</p>
+      </div>
+
+      {/* ── Monthly calculation ── */}
+      <div className="mx-4 mt-3 rounded-2xl bg-white p-4 ring-1 ring-slate-200/60 shadow-[0_2px_12px_rgba(15,23,42,0.04)]">
+        <p className="text-[10px] text-slate-500 font-medium">Monthly · 28 days</p>
+
+        <div className="mt-3 flex items-baseline justify-between">
+          <span className="text-[11px] text-slate-600">Meals scheduled</span>
+          <span className="text-[15px] font-bold text-slate-900">28</span>
+        </div>
+
+        <div className="mt-3 grid grid-cols-3 divide-x divide-slate-200/60 text-center">
+          <div className="px-1">
+            <p className="text-[9px] text-slate-500">Lunches</p>
+            <p className="mt-0.5 text-[12px] font-semibold text-slate-800">14</p>
+          </div>
+          <div className="px-1">
+            <p className="text-[9px] text-slate-500">Dinners</p>
+            <p className="mt-0.5 text-[12px] font-semibold text-slate-800">14</p>
+          </div>
+          <div className="px-1">
+            <p className="text-[9px] text-slate-500">Full days</p>
+            <p className="mt-0.5 text-[12px] font-semibold text-slate-800">14</p>
+          </div>
+        </div>
+
+        <p className="mt-3 text-[9px] text-slate-400">Need at least 30 meals</p>
+
+        <div className="my-3 h-px bg-slate-100" />
+
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-slate-600">Price per meal</span>
+          <span className="text-[12px] font-semibold text-slate-800">₹124</span>
+        </div>
+
+        <div className="my-3 h-px bg-slate-100" />
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-[10px] font-medium text-slate-500">Monthly investment</span>
+          <span className="text-[20px] font-bold text-slate-900 leading-none">₹3,472</span>
+        </div>
+      </div>
+
+      <BottomNav active="profile" />
+    </div>
+  );
+}
+
+/* ─── Phone Frame ───────────────────────────────────────────────── */
+
+function PhoneMockup({
+  children,
+  rotate = 0,
+  delay = 0,
+  zIndex = 10,
+}: {
+  children: React.ReactNode;
+  rotate?: number;
+  delay?: number;
+  zIndex?: number;
+}) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 60, rotate: rotate - 4 }}
@@ -160,31 +320,34 @@ function PhoneMockup({ children, rotate = 0, delay = 0, zIndex = 10 }: { childre
       viewport={{ once: true }}
       transition={{ duration: 0.8, delay, type: 'spring', stiffness: 80 }}
       style={{ zIndex }}
-      className="relative w-[210px] h-[440px] bg-slate-900 rounded-[2.5rem] shadow-2xl border-[8px] border-slate-800 overflow-hidden shrink-0"
+      className="relative h-[440px] w-[210px] shrink-0 overflow-hidden rounded-[2.5rem] border-[8px] border-slate-800 bg-slate-900 shadow-2xl"
     >
       {/* Notch */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-20 h-4 bg-slate-900 rounded-b-2xl z-20" />
-      <div className="w-full h-full overflow-hidden">
-        {children}
-      </div>
+      <div className="absolute left-1/2 top-0 z-20 h-4 w-20 -translate-x-1/2 rounded-b-2xl bg-slate-900" />
+      <div className="h-full w-full overflow-hidden">{children}</div>
     </motion.div>
   );
 }
 
+/* ─── Public Component ──────────────────────────────────────────── */
+
 export function AppPreview() {
   return (
-    <section className="py-24 bg-slate-900 text-white overflow-hidden relative">
-      {/* Subtle texture */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(230, 138, 0, 0.15),transparent_60%)] pointer-events-none" />
+    <section className="relative overflow-hidden bg-slate-900 py-24 text-white">
+      {/* Subtle background glow */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(230,138,0,0.15),transparent_60%)]"
+      />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-        {/* Section Header */}
-        <div className="text-center mb-16">
+      <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        {/* Section header */}
+        <div className="mb-16 text-center">
           <motion.p
             initial={{ opacity: 0, y: 10 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            className="text-amber-500 font-bold tracking-widest uppercase text-sm mb-3"
+            className="mb-3 text-sm font-bold uppercase tracking-widest text-amber-500"
           >
             App Preview
           </motion.p>
@@ -193,75 +356,63 @@ export function AppPreview() {
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ delay: 0.1 }}
-            className="text-4xl md:text-5xl font-black leading-tight"
+            className="text-4xl font-black leading-tight md:text-5xl"
           >
-            Manage your meals<br />from your pocket.
+            Manage your meals
+            <br />
+            from your pocket.
           </motion.h2>
           <motion.p
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ delay: 0.2 }}
-            className="text-slate-400 text-lg mt-4 max-w-xl mx-auto"
+            className="mx-auto mt-4 max-w-xl text-lg text-slate-400"
           >
-            A fast, beautiful Progressive Web App. No downloads needed — just open it in your browser.
+            A fast, beautiful Progressive Web App. No downloads needed — just open
+            it in your browser.
           </motion.p>
         </div>
 
-        {/* Phones Showcase */}
-        <div className="flex items-end justify-center gap-4 sm:gap-8 min-h-[480px] pb-8">
-          <PhoneMockup rotate={-6} delay={0} zIndex={10}>
-            <OrdersScreen />
-          </PhoneMockup>
+        {/* ── Phone showcase ──
+            < sm: single centered phone (zero overflow)
+            sm+: three staggered phones, original composition restored */}
+        <div className="flex min-h-[440px] items-end justify-center gap-4 pb-8 sm:gap-8">
+          <div className="hidden sm:block">
+            <PhoneMockup rotate={-6} delay={0} zIndex={10}>
+              <OrdersScreen />
+            </PhoneMockup>
+          </div>
 
           <PhoneMockup rotate={0} delay={0.15} zIndex={20}>
             <DashboardScreen />
           </PhoneMockup>
 
-          <PhoneMockup rotate={6} delay={0.3} zIndex={10}>
-            <div className="w-full h-full bg-[#FEFCE8] flex flex-col overflow-hidden select-none">
-              <div className="bg-gradient-to-r from-amber-600 to-amber-700 px-4 pt-5 pb-5">
-                <p className="text-amber-100 text-[9px] font-semibold uppercase tracking-widest mb-1">Your Profile</p>
-                <h2 className="text-white text-xl font-black">Hey, Test!</h2>
-              </div>
-              <div className="flex-1 px-3 pt-4 space-y-2.5">
-                {[
-                  { label: 'Active Plan', value: 'Weekly - 7 Days', icon: '📦' },
-                  { label: 'Meals Remaining', value: '5 of 7', icon: '🍱' },
-                  { label: 'Delivery Credits', value: '₹120', icon: '💳' },
-                  { label: 'Current Kitchen', value: 'Swad Kitchen', icon: '🍳' },
-                ].map(item => (
-                  <div key={item.label} className="bg-white rounded-2xl p-3 flex items-center gap-3 shadow-xs border border-slate-100">
-                    <span className="text-xl">{item.icon}</span>
-                    <div>
-                      <p className="text-[8px] text-slate-400 font-semibold">{item.label}</p>
-                      <p className="text-[11px] text-slate-800 font-black">{item.value}</p>
-                    </div>
-                  </div>
-                ))}
-                <div className="bg-amber-600 rounded-2xl p-3 text-center">
-                  <p className="text-white text-[10px] font-black">🏅 Rewards & Credits</p>
-                </div>
-              </div>
-              <div className="mt-auto border-t border-slate-100 bg-white flex items-center justify-around px-4 py-2">
-                {[{ icon: Home, label: 'HOME', active: false }, { icon: ShoppingBag, label: 'ORDERS', active: false }, { icon: User, label: 'PROFILE', active: true }].map(({ icon: Icon, label, active }) => (
-                  <div key={label} className="flex flex-col items-center gap-0.5">
-                    <Icon className={`w-4 h-4 ${active ? 'text-amber-600' : 'text-slate-400'}`} />
-                    <span className={`text-[7px] font-black ${active ? 'text-amber-600' : 'text-slate-400'}`}>{label}</span>
-                    {active && <div className="w-1 h-1 rounded-full bg-amber-600" />}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </PhoneMockup>
+          <div className="hidden sm:block">
+            <PhoneMockup rotate={6} delay={0.3} zIndex={10}>
+              <PlanScreen />
+            </PhoneMockup>
+          </div>
         </div>
 
         {/* Features row */}
-        <div className="mt-16 grid sm:grid-cols-3 gap-6 text-center max-w-3xl mx-auto">
+        <div className="mx-auto mt-16 grid max-w-3xl gap-6 text-center sm:grid-cols-3">
           {[
-            { label: 'No App Download', desc: 'Works right in your browser on any device.', icon: '⚡' },
-            { label: 'Real-Time Tracking', desc: 'Watch your rider come to you live on the map.', icon: '📍' },
-            { label: 'Swap & Pause', desc: 'Full control over your meals, any day.', icon: '🔄' },
+            {
+              label: 'No App Download',
+              desc: 'Works right in your browser on any device.',
+              icon: '⚡',
+            },
+            {
+              label: 'Real-Time Tracking',
+              desc: 'Watch your rider come to you live on the map.',
+              icon: '📍',
+            },
+            {
+              label: 'Swap & Pause',
+              desc: 'Full control over your meals, any day.',
+              icon: '🔄',
+            },
           ].map((f, i) => (
             <motion.div
               key={f.label}
@@ -269,11 +420,11 @@ export function AppPreview() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ delay: i * 0.1 }}
-              className="bg-white/5 border border-white/10 rounded-2xl p-6"
+              className="rounded-2xl border border-white/10 bg-white/5 p-6"
             >
-              <span className="text-3xl mb-3 block">{f.icon}</span>
-              <h4 className="font-black text-white mb-1">{f.label}</h4>
-              <p className="text-slate-400 text-sm">{f.desc}</p>
+              <span className="mb-3 block text-3xl">{f.icon}</span>
+              <h4 className="mb-1 font-black text-white">{f.label}</h4>
+              <p className="text-sm text-slate-400">{f.desc}</p>
             </motion.div>
           ))}
         </div>
