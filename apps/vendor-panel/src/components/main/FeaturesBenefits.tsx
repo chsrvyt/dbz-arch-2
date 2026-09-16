@@ -25,7 +25,7 @@ export function FeaturesBenefits() {
             className="bg-slate-50 rounded-3xl p-6 border border-slate-100 flex flex-col"
           >
             <div className="w-full h-48 bg-slate-200 rounded-2xl mb-6 overflow-hidden">
-              <img src="/dabzzo_tiffin_box.png" alt="Fresh Tiffin Box" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
+              <img src="/dabzzo_tiffin_box.webp" alt="Fresh Tiffin Box" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
             </div>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-brand/10 text-brand rounded-full flex items-center justify-center shrink-0">
@@ -58,7 +58,7 @@ export function FeaturesBenefits() {
             className="bg-slate-50 rounded-3xl p-6 border border-slate-100 flex flex-col"
           >
             <div className="w-full h-48 bg-emerald-100 rounded-2xl mb-6 overflow-hidden">
-              <img src="/dabzzo_kitchen_partner.png" alt="Local Indian Kitchen" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
+              <img src="/dabzzo_kitchen_partner.webp" alt="Local Indian Kitchen" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
             </div>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-emerald-500/10 text-emerald-600 rounded-full flex items-center justify-center shrink-0">
@@ -91,7 +91,7 @@ export function FeaturesBenefits() {
             className="bg-slate-50 rounded-3xl p-6 border border-slate-100 flex flex-col"
           >
             <div className="w-full h-48 bg-amber-100 rounded-2xl mb-6 overflow-hidden">
-              <img src="/dabzzo_delivery_rider.png" alt="Dabzzo Delivery Rider" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
+              <img src="/dabzzo_delivery_rider.webp" alt="Dabzzo Delivery Rider" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
             </div>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-amber-500/10 text-amber-600 rounded-full flex items-center justify-center shrink-0">

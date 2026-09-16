@@ -27,7 +27,7 @@ export function FeaturesBenefits() {
           >
             <div className="w-full h-48 bg-slate-200 rounded-2xl mb-6 overflow-hidden relative">
               <Image
-                src="/dabzzo_tiffin_box.png"
+                src="/dabzzo_tiffin_box.webp"
                 alt="Fresh Tiffin Box"
                 fill
                 className="object-cover hover:scale-105 transition-transform duration-500"
@@ -67,7 +67,7 @@ export function FeaturesBenefits() {
           >
             <div className="w-full h-48 bg-emerald-100 rounded-2xl mb-6 overflow-hidden relative">
               <Image
-                src="/dabzzo_kitchen_partner.png"
+                src="/dabzzo_kitchen_partner.webp"
                 alt="Local Indian Kitchen"
                 fill
                 className="object-cover hover:scale-105 transition-transform duration-500"
@@ -107,7 +107,7 @@ export function FeaturesBenefits() {
           >
             <div className="w-full h-48 bg-amber-100 rounded-2xl mb-6 overflow-hidden relative">
               <Image
-                src="/dabzzo_delivery_rider.png"
+                src="/dabzzo_delivery_rider.webp"
                 alt="Dabzzo Delivery Rider"
                 fill
                 className="object-cover hover:scale-105 transition-transform duration-500"

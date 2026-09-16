@@ -418,7 +418,12 @@ function CustomerTrackContent() {
           scheduledSlot,
           vendorName: sub.vendor_name || sub.kitchen_name,
           vendorId: sub.vendor_id,
-          address: { line1: 'Delivery Address from Plan' }, // Placeholder or use user.location if available
+          address:
+            sub.delivery_address
+              ? typeof sub.delivery_address === 'string'
+                ? { line1: sub.delivery_address }
+                : sub.delivery_address
+              : undefined,
           createdAt: { toDate: () => targetDate, seconds: targetDate.getTime() / 1000 },
           isProjected: true
         });
