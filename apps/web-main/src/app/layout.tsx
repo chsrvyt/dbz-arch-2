@@ -42,7 +42,7 @@ export default function RootLayout({
     // extensions (QuillBot writes data-qb-installed, Grammarly and password
     // managers do similar) mutate <html> before React hydrates, which React
     // otherwise reports as a hydration error the app cannot fix.
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" data-scroll-behavior="smooth" suppressHydrationWarning>
       <body className="bg-[#FEFCE8] text-slate-900 antialiased font-sans">
         <Toaster position="top-center" />
         <PermissionGuard />
