@@ -434,12 +434,7 @@ export function WeeklyCustomPlanBuilder({
   }, [totalMeals, weekDays, slots, selections, effectivePricePerMeal, weeklyTotal, customMealConfig, vendorId, slotCounts, onConfirmCheckout]);
 
   return (
-    <div
-      className={cn(
-        'w-full max-w-2xl mx-auto rounded-3xl bg-[#FFFDF7] border border-amber-200/80 shadow-xl shadow-amber-900/5 p-4 sm:p-6 md:p-8 transition-all',
-        className
-      )}
-    >
+    <div className={cn('w-full max-w-2xl mx-auto transition-all', className)}>
       {/* ── Heading & Subtitle ────────────────────────────────────────────── */}
       {!hideHeader && (
         <div className="mb-6 text-left sm:text-center">
@@ -641,8 +636,9 @@ export function WeeklyCustomPlanBuilder({
         })}
       </div>
 
-      {/* ── Thali Portions Customizer Section ──────────────────────────────── */}
-      <div className="mb-6 rounded-3xl border border-amber-200/90 bg-white p-4 sm:p-5 shadow-sm">
+      {/* ── Thali Portions Customizer Section ────────────────────────────────
+          ThaliCustomizer renders its own card, so no wrapper box here. */}
+      <div className="mb-6">
         <ThaliCustomizer
           baseMealPrice={pricePerMeal}
           planType="weekly"
@@ -655,11 +651,11 @@ export function WeeklyCustomPlanBuilder({
       </div>
 
       {/* ── Real-Time Weekly Price Breakdown Receipt ──────────────────────── */}
-      <div className="mb-6 rounded-3xl bg-gradient-to-br from-amber-50/95 via-white to-orange-50/70 border border-amber-200 p-4 sm:p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-3 pb-3 border-b border-amber-200/70">
-          <span className="text-xs font-black uppercase tracking-wider text-amber-950 flex items-center gap-1.5">
-            <Sparkles className="w-4 h-4 text-amber-600" />
-            Weekly Plan Calculation Receipt
+      <div className="mb-6 rounded-2xl bg-gradient-to-br from-amber-50/70 via-white to-orange-50/50 border border-amber-200/80 shadow-sm">
+        <div className="flex items-center justify-between px-5 pt-4">
+          <span className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+            Price Summary
           </span>
           {isLoadingPricing && (
             <span className="text-[11px] font-medium text-amber-700 animate-pulse">
@@ -668,24 +664,14 @@ export function WeeklyCustomPlanBuilder({
           )}
         </div>
 
-        {/* Receipt body.
-            Rewritten for legibility on a phone: every line is one label/value
-            pair on a single baseline with tabular figures, so the numbers form a
-            column the eye can scan. Previously the rate explainer ("Kitchen Food
-            Rate + Rs 11 Delivery Fee + 12% Weekly Platform Margin") sat as a
-            right-aligned value and wrapped across three lines against its own
-            label, and the slot counts were a separate bordered pill competing
-            with the total. Same numbers, one hierarchy: rows, then the total,
-            then one muted footnote carrying the fee disclosure. */}
-        <div className="space-y-2.5 text-sm">
-
-          <div className="flex items-baseline justify-between gap-3">
+        <div className="mt-1 divide-y divide-amber-100/70 px-5 py-1 text-sm">
+          <div className="flex items-baseline justify-between gap-3 py-2.5">
             <span className="text-slate-600">Meals scheduled</span>
-            <span className="font-bold text-slate-900 tabular-nums">{totalMeals}</span>
+            <span className="font-semibold text-slate-900 tabular-nums">{totalMeals}</span>
           </div>
 
           {totalMeals > 0 && (
-            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-400 -mt-1.5">
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 py-1.5 text-xs text-slate-400">
               {slotCounts.lunch > 0 && <span>{slotCounts.lunch} lunch</span>}
               {slotCounts.dinner > 0 && <span>{slotCounts.dinner} dinner</span>}
               {slotCounts.both > 0 && (
@@ -694,15 +680,15 @@ export function WeeklyCustomPlanBuilder({
             </div>
           )}
 
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-baseline justify-between gap-3 py-2.5">
             <span className="text-slate-600">Price per meal</span>
-            <span className="font-bold text-slate-900 tabular-nums">₹{effectivePricePerMeal}</span>
+            <span className="font-semibold text-slate-900 tabular-nums">₹{effectivePricePerMeal}</span>
           </div>
 
           {customMealConfig && (customMealConfig.customerDeltaPerMeal ?? 0) !== 0 && (
-            <div className="flex items-baseline justify-between gap-3 text-xs text-amber-700 -mt-1.5">
+            <div className="flex items-baseline justify-between gap-3 py-2.5 text-xs text-amber-700">
               <span>Thali portion adjustment</span>
-              <span className="font-semibold tabular-nums">
+              <span className="font-medium tabular-nums">
                 {(customMealConfig.customerDeltaPerMeal ?? 0) > 0 ? '+' : '−'}₹{Math.abs(customMealConfig.customerDeltaPerMeal ?? 0)}
               </span>
             </div>
@@ -710,34 +696,36 @@ export function WeeklyCustomPlanBuilder({
 
           {totalMeals > 0 && weeklyPricingResult && (
             <>
-              <div className="flex items-baseline justify-between gap-3 text-slate-600">
+              <div className="flex items-baseline justify-between gap-3 py-2.5 text-slate-600">
                 <span>Subtotal</span>
-                <span className="font-semibold text-slate-800 tabular-nums">₹{weeklyPricingResult.mealsSubtotal}</span>
+                <span className="font-medium text-slate-800 tabular-nums">₹{weeklyPricingResult.mealsSubtotal}</span>
               </div>
-              <div className="flex items-baseline justify-between gap-3 text-slate-600">
+              <div className="flex items-baseline justify-between gap-3 py-2.5 text-slate-600">
                 <span className="flex items-center gap-1.5">
                   <CreditCard className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                   Payment gateway
                 </span>
-                <span className="font-semibold text-slate-800 tabular-nums">+₹{weeklyPricingResult.razorpayFee}</span>
+                <span className="font-medium text-slate-800 tabular-nums">+₹{weeklyPricingResult.razorpayFee}</span>
               </div>
             </>
           )}
 
-          <div className="flex items-baseline justify-between gap-3 pt-3 mt-1 border-t border-amber-200/70">
+          <div className="flex items-baseline justify-between gap-3 pt-3 pb-2 mt-1">
             <span className="font-bold text-slate-900">Total</span>
-            <span className="text-2xl font-black text-amber-800 tracking-tight tabular-nums">₹{weeklyTotal}</span>
+            <span className="text-2xl font-bold text-amber-800 tracking-tight tabular-nums">
+              ₹{weeklyTotal}
+            </span>
           </div>
-
-          <p className="text-[11px] leading-relaxed text-slate-400">
-            Includes ₹11 delivery and a 12% platform margin, plus 2% payment gateway.
-            Doorstep delivery and hot packing included.
-          </p>
-
         </div>
+
+        <p className="px-5 pb-4 text-[11px] leading-relaxed text-slate-400">
+          Includes ₹11 delivery and a 12% platform margin, plus 2% payment gateway.
+          Doorstep delivery and hot packing included.
+        </p>
+
         {totalMeals === 0 && (
-          <p className="text-xs text-amber-800/90 mt-3 flex items-center gap-1.5 bg-amber-100/60 p-2 rounded-xl border border-amber-200">
-            <Info className="w-4 h-4 shrink-0 text-amber-600" />
+          <p className="mx-5 mb-4 text-xs text-amber-800/80 flex items-center gap-1.5">
+            <Info className="w-3.5 h-3.5 shrink-0 text-amber-600" />
             Pick at least 1 meal slot this week to calculate your customized plan.
           </p>
         )}

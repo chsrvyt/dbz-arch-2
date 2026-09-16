@@ -652,12 +652,7 @@ export function MonthlyCustomPlanBuilder({
   }, [totalMeals, days28, dateRangeFormatted, slots, selections, effectivePricePerMeal, monthlyTotal, customMealConfig, vendorId, slotCounts, onConfirmCheckout]);
 
   return (
-    <div
-      className={cn(
-        'w-full max-w-4xl mx-auto rounded-3xl bg-[#FFFDF7] border border-amber-200/80 shadow-xl shadow-amber-900/5 p-4 sm:p-6 md:p-8 transition-all',
-        className
-      )}
-    >
+    <div className={cn('w-full max-w-4xl mx-auto transition-all', className)}>
       {/* ── Heading & Brand Tag ────────────────────────────────────────────── */}
       {!hideHeader && (
         <div className="mb-6 text-left sm:text-center">
@@ -1120,8 +1115,9 @@ export function MonthlyCustomPlanBuilder({
         </div>
       </div>
 
-      {/* ── Thali Portions Customizer Section ──────────────────────────────── */}
-      <div className="mb-6 rounded-3xl border border-amber-200/90 bg-white p-4 sm:p-5 shadow-sm">
+      {/* ── Thali Portions Customizer Section ────────────────────────────────
+          ThaliCustomizer renders its own card, so no wrapper box here. */}
+      <div className="mb-6">
         <ThaliCustomizer
           baseMealPrice={pricePerMeal}
           planType="monthly"
@@ -1133,12 +1129,12 @@ export function MonthlyCustomPlanBuilder({
         />
       </div>
 
-      {/* ── Real-Time Monthly Receipt Breakdown ────────────────────────────── */}
-      <div className="mb-6 rounded-3xl bg-gradient-to-br from-amber-50/95 via-white to-orange-50/70 border border-amber-200 p-4 sm:p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-3 pb-3 border-b border-amber-200/70">
-          <span className="text-xs font-black uppercase tracking-wider text-amber-950 flex items-center gap-1.5">
-            <Sparkles className="w-4 h-4 text-amber-600" />
-            28-Day Monthly Plan Calculation Receipt
+      {/* ── Real-Time Monthly Price Summary ───────────────────────────────── */}
+      <div className="mb-6 rounded-2xl bg-gradient-to-br from-amber-50/70 via-white to-orange-50/50 border border-amber-200/80 shadow-sm">
+        <div className="flex items-center justify-between px-5 pt-4">
+          <span className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+            Price Summary
           </span>
           {isLoadingPricing && (
             <span className="text-[11px] font-medium text-amber-700 animate-pulse">
@@ -1147,72 +1143,70 @@ export function MonthlyCustomPlanBuilder({
           )}
         </div>
 
-        <div className="space-y-3">
-          {/* Total Meals & Slot Breakdown */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-sm sm:text-base text-slate-700">
-            <span className="font-semibold text-slate-800">Total Meals Scheduled:</span>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-black text-slate-900 text-base sm:text-lg">
-                {totalMeals} Meals
+        <div className="mt-1 divide-y divide-amber-100/70 px-5 py-1">
+          <div className="py-2.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-sm text-slate-600">Meals scheduled</span>
+              <span className="text-sm font-semibold text-slate-900 tabular-nums">
+                {totalMeals}
               </span>
-              <span className="text-xs font-bold text-amber-900 bg-amber-100/90 px-2 py-0.5 rounded-lg border border-amber-200">
-                ☀️ {slotCounts.lunch} Lunches • 🌙 {slotCounts.dinner} Dinners • 🍱 {slotCounts.both} Full Days
-              </span>
-              {totalMeals >= 30 ? (
-                <span className="text-xs font-black text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-lg border border-emerald-300">
-                  ✓ Min. Requirement Met
-                </span>
-              ) : (
-                <span className="text-xs font-black text-amber-900 bg-amber-200/80 px-2.5 py-0.5 rounded-lg border border-amber-300">
-                  ⚠️ Need at least 30 meals
-                </span>
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
+              {slotCounts.lunch > 0 && <span>{slotCounts.lunch} lunch</span>}
+              {slotCounts.dinner > 0 && <span>{slotCounts.dinner} dinner</span>}
+              {slotCounts.both > 0 && (
+                <span>{slotCounts.both} full {slotCounts.both === 1 ? 'day' : 'days'}</span>
               )}
+              {totalMeals > 0 &&
+                (totalMeals >= 30 ? (
+                  <span className="text-[11px] font-medium text-emerald-600">
+                    ✓ Minimum met
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-medium text-amber-600">
+                    Need {30 - totalMeals} more to reach 30
+                  </span>
+                ))}
             </div>
           </div>
 
-          {/* Rate Per Meal */}
-          <div className="flex items-center justify-between text-sm sm:text-base text-slate-700">
-            <span className="font-semibold text-slate-800">Price Per Meal:</span>
-            <div className="text-right">
-              <span className="font-bold text-slate-900">
-                ₹{effectivePricePerMeal}
-              </span>
+          <div className="flex items-baseline justify-between gap-3 py-2.5 text-sm">
+            <span className="text-slate-600">Price per meal</span>
+            <span className="font-semibold text-slate-900 tabular-nums">
+              ₹{effectivePricePerMeal}
               {customMealConfig && (customMealConfig.customerDeltaPerMeal ?? 0) !== 0 && (
-                <span className="text-xs font-bold text-amber-700 ml-1.5">
-                  {((customMealConfig.customerDeltaPerMeal ?? 0) > 0 ? `+₹${customMealConfig.customerDeltaPerMeal}` : `-₹${Math.abs(customMealConfig.customerDeltaPerMeal ?? 0)}`)} thali delta
+                <span className="ml-1.5 text-xs font-medium text-amber-700">
+                  {((customMealConfig.customerDeltaPerMeal ?? 0) > 0
+                    ? `+₹${customMealConfig.customerDeltaPerMeal}`
+                    : `-₹${Math.abs(customMealConfig.customerDeltaPerMeal ?? 0)}`)}{' '}
+                  adjusted
                 </span>
               )}
-            </div>
-          </div>
-
-          {/* Platform Pricing Transparency */}
-          <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-amber-100">
-            <span>Pricing Breakdown per Meal:</span>
-            <span className="font-medium text-slate-700">
-              Kitchen Food Rate + ₹11 Delivery Fee + 13% Food Margin
             </span>
           </div>
 
-          {/* Monthly Total */}
-          <div className="pt-3 border-t border-amber-200/80 flex items-center justify-between">
-            <div>
-              <span className="text-base sm:text-lg font-black text-slate-900 block">
-                Total Monthly Investment:
-              </span>
-              <span className="text-xs text-slate-500">
-                28-day cycle with doorstep delivery & daily hot packaging
+          <div className="pt-3 pb-2.5 mt-1">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="font-bold text-slate-900">Total</span>
+              <span className="text-2xl font-bold text-amber-800 tracking-tight tabular-nums">
+                ₹{monthlyTotal}
               </span>
             </div>
-            <span className="text-2xl sm:text-3xl font-black text-amber-800 tracking-tight">
-              ₹{monthlyTotal}
-            </span>
+            <p className="mt-1 text-xs text-slate-400">
+              28-day cycle · doorstep delivery &amp; daily hot packaging
+            </p>
           </div>
         </div>
 
+        <p className="px-5 pb-4 text-[11px] leading-relaxed text-slate-400">
+          Per meal: kitchen food rate + ₹11 delivery + 13% food margin.
+        </p>
+
         {totalMeals === 0 && (
-          <p className="text-xs text-amber-800/90 mt-3 flex items-center gap-1.5 bg-amber-100/60 p-2.5 rounded-xl border border-amber-200">
-            <Info className="w-4 h-4 shrink-0 text-amber-600" />
-            Pick meals for any days in the 28-day window ({dateRangeFormatted}). Monthly plans require a minimum of 30 meals.
+          <p className="mx-5 mb-4 text-xs text-amber-800/80 flex items-center gap-1.5">
+            <Info className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+            Pick meals for any days in the 28-day window ({dateRangeFormatted}).
+            Monthly plans require a minimum of 30 meals.
           </p>
         )}
       </div>
