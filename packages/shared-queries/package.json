@@ -15,6 +15,7 @@
     "./payments": "./src/payments.ts",
     "./pricing": "./src/pricing.ts",
     "./reviews": "./src/reviews.ts",
+    "./referrals": "./src/referrals.ts",
     "./rewards": "./src/rewards.ts",
     "./subscriptions": "./src/subscriptions.ts",
     "./support": "./src/support.ts",

@@ -9,6 +9,7 @@ import { db } from '@/lib/firebase';
 import { redeemVoucher } from '@/lib/queries/rewards';
 import toast from 'react-hot-toast';
 import { getErrorMessage } from '@dabzzo/shared-lib/errors';
+import { isSubscriptionActive } from '@dabzzo/shared-lib/subscriptionEntitlement';
 
 export default function RewardsPage() {
   const user = useAuthStore(s => s.user);
@@ -38,12 +39,14 @@ export default function RewardsPage() {
     }, console.error);
 
     const unsubSubs = onSnapshot(subsQ, (snap) => {
-      setHasActiveSubscription(!snap.empty);
-      if (!snap.empty) {
-        setActiveSubscriptionId(snap.docs[0].id);
-      } else {
-        setActiveSubscriptionId(null);
-      }
+      // Entitlement-aware: expired-but-stored-active subs must not enable
+      // voucher redemption (which grants more subscription days).
+      const nowMs = Date.now();
+      const validSubs = snap.docs
+        .map(d => ({ id: d.id, ...d.data() } as any))
+        .filter(s => isSubscriptionActive(s, nowMs));
+      setHasActiveSubscription(validSubs.length > 0);
+      setActiveSubscriptionId(validSubs[0]?.id ?? null);
       setLoading(false);
     }, console.error);
 

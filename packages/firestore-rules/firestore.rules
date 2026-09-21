@@ -202,6 +202,37 @@ service cloud.firestore {
       );
     }
 
+    // Referral code registry — UNIQUE(referral_code) enforced by doc id = code.
+    // Written only by Cloud Functions (Admin SDK bypasses rules); users may
+    // look up codes while attributing a sign-up.
+    match /referral_codes/{codeId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    // Referral records — one per (referral_code × referred user), created by
+    // applyReferralCode and completed/rejected by server triggers only.
+    match /referrals/{referralId} {
+      allow get: if request.auth != null && (
+        resource.data.get('referrer_user_id', '') == request.auth.uid ||
+        resource.data.get('referred_user_id', '') == request.auth.uid ||
+        isAdmin()
+      );
+      allow write: if isAdmin();
+    }
+
+    // Milestone reward claims — UNIQUE(user_id, milestone_id) via determin-
+    // istic doc id `{userId}_{milestoneId}`. Claimed/used flags change only
+    // from server code. Users read only their own claims (for the dashboard).
+    match /referral_milestone_claims/{claimId} {
+      allow get: if request.auth != null && (
+        resource == null ||
+        resource.data.get('user_id', '') == request.auth.uid ||
+        isAdmin()
+      );
+      allow write: if isAdmin();
+    }
+
     // Batches — order grouping managed by verified vendors or admins
     match /batches/{batchId} {
       allow list, get: if request.auth != null && (isAdmin() || isVerifiedRider() || isVerifiedVendor());
@@ -302,8 +333,22 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════════════
 
     match /orders/{orderId} {
-      allow list, get: if request.auth != null && (
-        isAdmin() || isVerifiedRider() || isVerifiedVendor() ||
+      // Participant-only access. A rider/vendor may only see orders they are
+      // PART of, never the full cross-tenant collection (prevents IDOR list &
+      // get enumeration of other customers' names, addresses and OTPs).
+      allow list: if request.auth != null && (
+        isAdmin() ||
+        resource.data.get('user_id', '') == request.auth.uid ||
+        resource.data.get('customerId', '') == request.auth.uid ||
+        resource.data.get('vendor_id', '') == request.auth.uid ||
+        resource.data.get('vendorId', '') == request.auth.uid ||
+        resource.data.get('rider_id', '') == request.auth.uid ||
+        resource.data.get('riderId', '') == request.auth.uid ||
+        resource.data.get('driverId', '') == request.auth.uid ||
+        resource.data.get('agentId', '') == request.auth.uid
+      );
+      allow get: if request.auth != null && (
+        isAdmin() ||
         resource.data.get('user_id', '') == request.auth.uid ||
         resource.data.get('customerId', '') == request.auth.uid ||
         resource.data.get('vendor_id', '') == request.auth.uid ||
@@ -366,7 +411,7 @@ service cloud.firestore {
                     resource.data.get('riderId', '') == request.auth.uid
                   ));
       allow list: if request.auth != null && (
-        isAdmin() || isVerifiedRider() || isVerifiedVendor() ||
+        isAdmin() ||
         resource.data.get('customerId', '') == request.auth.uid ||
         resource.data.get('user_id', '') == request.auth.uid ||
         resource.data.get('vendorId', '') == request.auth.uid ||
@@ -391,7 +436,15 @@ service cloud.firestore {
         resource.data.vendor_id == request.auth.uid ||
         isAdmin()
       );
-      allow list: if request.auth != null;
+      // Participant-only list: a server callable or the requester's own active
+      // subscription searches by user_id/vendor_id. Cross-tenant enumeration
+      // of every customer's plan and address is denied.
+      allow list: if request.auth != null && (
+        resource == null ||
+        resource.data.user_id == request.auth.uid ||
+        resource.data.vendor_id == request.auth.uid ||
+        isAdmin()
+      );
       allow create: if request.auth != null && (request.resource.data.user_id == request.auth.uid || isAdmin());
       allow update: if request.auth != null && (
         resource.data.user_id == request.auth.uid ||

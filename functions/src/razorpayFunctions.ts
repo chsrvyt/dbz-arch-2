@@ -38,6 +38,74 @@ import {
   DEFAULT_STANDARD_MEAL,
   SubscriptionMealSlotInput,
 } from './pricingEngine';
+import { resolveReferralCoupon } from './referralFunctions';
+
+/**
+ * Applies a referral coupon server-side when present. Monthly-only, owned by
+ * the caller, single-use — all validated here, never trusted from the client.
+ * Returns the final chargeable amount in paise and notes to enrich.
+ */
+export async function applyReferralCouponToOrder(
+  data: any,
+  notes: Record<string, any>,
+  amountPaise: number,
+  callerUid: string | null
+): Promise<number> {
+  const couponCode = typeof data?.coupon === 'string' ? data.coupon.trim().toUpperCase().slice(0, 20) : '';
+  if (!couponCode) return amountPaise;
+
+  if (!callerUid) {
+    throw new HttpsError('unauthenticated', 'You must be signed in to use a referral coupon.');
+  }
+
+  // Custom plans (pattern/schedule) do not support referral coupons.
+  const customConfig =
+    data?.pattern ||
+    data?.deliveryPattern ||
+    data?.customPlanConfig ||
+    (Array.isArray(data?.schedule) && data.schedule.length > 0);
+  if (customConfig) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Referral coupons can only be applied to a monthly subscription plan.'
+    );
+  }
+
+  // Monthly-only: derive the plan's cycle from the order inputs.
+  const notesData = notes || {};
+  const frequency = String(notesData.frequency || data?.frequency || data?.planType || '').toLowerCase();
+  const planId = String(data?.plan_id || notesData.plan_id || data?.planType || '').toLowerCase();
+  const isMonthly = frequency === 'monthly' || planId.includes('monthly');
+  if (!isMonthly) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Referral coupons can only be applied to a monthly subscription plan.'
+    );
+  }
+
+  const resolved = await resolveReferralCoupon(couponCode, callerUid);
+  if (!resolved.valid) {
+    throw new HttpsError('invalid-argument', resolved.message || 'Invalid referral coupon.');
+  }
+
+  // Discount base: the client may pass the pre-coupon amount so the server
+  // computes the discount itself on a number it controls; otherwise fall back
+  // to the (authoritatively resolved) order amount.
+  const basePaise = Number(data?.base_amount_paise) > 0 ? Number(data.base_amount_paise) : amountPaise;
+  const discountPaise = Math.round((basePaise * (resolved.discountPct || 0)) / 100);
+  const finalPaise = basePaise - discountPaise;
+  if (finalPaise < 100) {
+    throw new HttpsError('invalid-argument', 'Coupon discount exceeds the payable amount.');
+  }
+
+  notes.coupon_code = resolved.code;
+  notes.coupon_discount_pct = resolved.discountPct;
+  notes.referral_coupon = true;
+  notes.base_amount_paise = basePaise;
+  notes.coupon_discount_paise = discountPaise;
+
+  return finalPaise;
+}
 
 /**
  * Authoritatively calculates the required Razorpay order amount (in paise)
@@ -167,6 +235,9 @@ export const createRazorpayOrder = onCall({ region: 'us-central1', cors: true },
     console.error('[createRazorpayOrder] Pricing calculation failed:', pricingErr);
     throw new HttpsError('invalid-argument', pricingErr?.message || 'Invalid meal or schedule configuration for pricing.');
   }
+
+  // ── Referral coupon enforcement (monthly-only, owner-only, single-use) ──
+  amount = await applyReferralCouponToOrder(data, notes, amount, request.auth?.uid ?? null);
 
   if (!amount || amount < 100 || amount > 50_000_000) {
     throw new HttpsError('invalid-argument', 'Invalid amount. Must be between ₹1 and ₹500,000.');
@@ -390,6 +461,18 @@ export const razorpayApi = onRequest({ region: 'us-central1', cors: true }, asyn
         console.error('[razorpayApi create-order] Authoritative pricing calculation failed:', pricingErr);
         res.status(400).json({ error: pricingErr?.message || 'Invalid meal or schedule configuration for pricing.' });
         return;
+      }
+
+      // Referral coupon enforcement on REST (same rules as the callable path).
+      if (data?.coupon) {
+        const caller = await requireAuth(req, res);
+        if (!caller) return;
+        try {
+          amount = await applyReferralCouponToOrder(data, notes, amount, caller.uid);
+        } catch (couponErr: any) {
+          res.status(400).json({ error: couponErr?.message || 'Invalid referral coupon.' });
+          return;
+        }
       }
 
       if (!amount || amount < 100 || amount > 50_000_000) {

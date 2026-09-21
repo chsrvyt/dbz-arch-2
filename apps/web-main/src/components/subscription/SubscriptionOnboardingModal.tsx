@@ -2,11 +2,12 @@
 
 import { getCurrentPosition, GeolocationError, geoErrorMessage } from '@dabzzo/shared-lib/geolocation';
 import { useState, useEffect } from 'react';
-import { Loader2, MapPin, Navigation, ArrowLeft, ShieldCheck, CreditCard, Plus, Check, Sparkles } from 'lucide-react';
+import { Loader2, MapPin, Navigation, ArrowLeft, ShieldCheck, CreditCard, Plus, Check, Sparkles, BadgePercent, X } from 'lucide-react';
 import { VegIcon, NonVegIcon } from '@/components/shared/DietaryIcon';
 import { AppUser, SubscriptionFrequency, MealType, DietaryCategory, SelectedAddon } from '@/types';
 import { updateUser } from '@/lib/queries/users';
 import { createSubscription } from '@/lib/queries/subscriptions';
+import { validateReferralCoupon } from '@/lib/queries/referrals';
 import { useUiStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { createPortal } from 'react-dom';
@@ -16,6 +17,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { createRazorpayOrder, verifyPaymentSignature, loadRazorpayCheckoutScript } from '@/lib/razorpay';
 import { reverseGeocode } from '@/lib/geo';
 import { ThaliCustomizer, ThaliCustomizerConfig } from './ThaliCustomizer';
+import { isSubscriptionActive } from '@dabzzo/shared-lib/subscriptionEntitlement';
 
 type RazorpayPaymentResponse = {
   razorpay_payment_id: string;
@@ -67,6 +69,11 @@ export function SubscriptionOnboardingModal({
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'creating_order' | 'awaiting_payment' | 'verifying' | 'activating' | 'done'>('idle');
   const [mounted, setMounted] = useState(false);
   const [activeSub, setActiveSub] = useState<any>(null);
+  // ── Referral coupon state ──────────────────────────────────────────────
+  const [referralCoupon, setReferralCoupon] = useState<{ code: string; discountPct: number } | null>(null);
+  const [couponInput, setCouponInput] = useState('');
+  const [couponChecking, setCouponChecking] = useState(false);
+  const [orderAmountPaise, setOrderAmountPaise] = useState<number | null>(null);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -109,9 +116,11 @@ export function SubscriptionOnboardingModal({
             where('vendor_id', '==', vendor.id),
             where('status', '==', 'active')
           ));
+          const nowMs = Date.now();
           if (!subsSnap.empty) {
             const active = subsSnap.docs
               .map(d => ({ id: d.id, ...d.data() } as any))
+              .filter((s: any) => isSubscriptionActive(s, nowMs)) // expired cannot earn proration
               .find(s => s.meal_type === 'lunch' || s.meal_type === 'dinner');
             setActiveSub(active || null);
           } else {
@@ -196,6 +205,11 @@ export function SubscriptionOnboardingModal({
   const discountAmt = appliedDiscount ? Math.round((basePrice * appliedDiscount.discount_pct) / 100) : 0;
   const finalPrice = Math.max(0, basePrice + totalAddonsPrice + thaliDeltaTotal - discountAmt - prorationCredit);
   const amountPaise = finalPrice * 100;
+  // Referral coupon discount is applied on top (server-computed at order time;
+  // this is the client's display estimate, using the same formula).
+  const couponDiscountPaise = Math.round((amountPaise * (referralCoupon?.discountPct || 0)) / 100);
+  const finalPriceWithCoupon = Math.max(0, finalPrice - Math.round(couponDiscountPaise / 100));
+  const payAmountPaise = referralCoupon ? (orderAmountPaise ?? (amountPaise - couponDiscountPaise)) : amountPaise;
 
   const handleToggleAddon = (id: string) => {
     setSelectedAddonIds(prev => 
@@ -280,6 +294,31 @@ export function SubscriptionOnboardingModal({
     setStep(5);
   };
 
+  const handleApplyCoupon = async () => {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) { addToast('Enter a coupon code first', 'warning'); return; }
+    setCouponChecking(true);
+    try {
+      const res = await validateReferralCoupon(code);
+      if (res.valid && res.discountPct) {
+        setReferralCoupon({ code: res.code, discountPct: res.discountPct });
+        setCouponInput('');
+        addToast(`${res.discountPct}% OFF referral coupon applied! 🎉`, 'success');
+      } else {
+        addToast(res.message || 'This coupon is invalid or not usable here.', 'error');
+      }
+    } catch {
+      addToast('Could not validate coupon. Try again.', 'error');
+    } finally {
+      setCouponChecking(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setReferralCoupon(null);
+    setOrderAmountPaise(null);
+  };
+
   const activateVerifiedSubscription = async (response: RazorpayPaymentResponse) => {
     setPaymentStatus('activating');
     const userUpdates: Partial<AppUser> = {
@@ -315,11 +354,11 @@ export function SubscriptionOnboardingModal({
       base_price: basePrice,
       addons_price: totalAddonsPrice,
       total_price: basePrice + totalAddonsPrice + thaliDeltaTotal,
-      discount_pct: appliedDiscount?.discount_pct,
-      promo_code: appliedDiscount?.code,
+      discount_pct: referralCoupon ? referralCoupon.discountPct : appliedDiscount?.discount_pct,
+      promo_code: referralCoupon ? referralCoupon.code : appliedDiscount?.code,
       payment_id: response.razorpay_payment_id,
       razorpay_order_id: response.razorpay_order_id,
-      paid_amount: finalPrice,
+      paid_amount: referralCoupon ? Math.round(payAmountPaise / 100) : finalPrice,
       custom_meal_config: customMealConfig || undefined,
       meal_components: customMealConfig?.manifestSummary ? [customMealConfig.manifestSummary] : undefined,
     });
@@ -372,11 +411,18 @@ export function SubscriptionOnboardingModal({
           frequency: selectedFrequency,
           category: dietaryCategory,
         },
-        vendor.id
+        vendor.id,
+        referralCoupon ? { coupon: referralCoupon.code, base_amount_paise: amountPaise } : undefined
       );
 
       const order_id = order.order_id;
+      // When a referral coupon applies, the server returns the authoritative
+      // discounted amount — use it for the checkout & the recorded paid_amount.
+      if (referralCoupon && order.amount) {
+        setOrderAmountPaise(order.amount);
+      }
       setPaymentStatus('awaiting_payment');
+      const chargedPaise = referralCoupon && order.amount ? order.amount : amountPaise;
 
       const paymentResponse = await new Promise<RazorpayPaymentResponse>((resolve, reject) => {
         const RazorpayConstructor = window.Razorpay;
@@ -387,7 +433,7 @@ export function SubscriptionOnboardingModal({
 
         const rzp = new RazorpayConstructor({
           key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_live_TarSzNR6D7TlJJ',
-          amount: amountPaise,
+          amount: chargedPaise,
           currency: 'INR',
           name: vendor.kitchen_name || vendor.name || 'Dabzzo',
           description: `${dietaryCategory === 'non_veg' ? '🍗 Non-Veg ' : '🌿 Veg '}${planId.charAt(0).toUpperCase() + planId.slice(1)} Plan — ${selectedFrequency}`,
@@ -435,7 +481,7 @@ export function SubscriptionOnboardingModal({
       case 'awaiting_payment': return 'Opening Payment…';
       case 'verifying':       return 'Verifying Payment…';
       case 'activating':      return 'Activating Plan…';
-      default: return `Pay ₹${finalPrice} with Razorpay`;
+      default: return `Pay ₹${referralCoupon ? finalPriceWithCoupon : finalPrice} with Razorpay`;
     }
   };
 
@@ -752,6 +798,60 @@ export function SubscriptionOnboardingModal({
                 {/* ── Step 5: Order Summary + Razorpay Pay Button ──────────── */}
                 {step === 5 && (
                   <div className="space-y-5 animate-fade-in">
+                    {/* Referral coupon block */}
+                    {referralCoupon ? (
+                      <div className="flex items-center justify-between bg-amber-50/80 border border-amber-200/70 rounded-2xl px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <BadgePercent className="w-4 h-4 text-amber-700 shrink-0" />
+                          <div>
+                            <p className="text-xs font-black text-amber-900">
+                              Referral coupon applied — {referralCoupon.discountPct}% OFF
+                            </p>
+                            <p className="text-[10px] font-bold text-amber-700">
+                              {referralCoupon.code} · valid on monthly plans only
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRemoveCoupon}
+                          className="w-7 h-7 rounded-full bg-white border border-amber-200 flex items-center justify-center text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer"
+                          aria-label="Remove coupon"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <BadgePercent className="w-4 h-4 text-slate-400" />
+                          <p className="text-[11px] font-black text-slate-500 uppercase tracking-widest">
+                            Have a Referral coupon?
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={couponInput}
+                            onChange={(e) => setCouponInput(e.target.value.toUpperCase().slice(0, 12))}
+                            placeholder="e.g. REF10-AB12CD"
+                            className="flex-1 bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-amber-500 focus:bg-white transition-all placeholder:text-slate-400 placeholder:font-normal"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleApplyCoupon}
+                            disabled={couponChecking || !couponInput.trim()}
+                            className="px-4 py-3 bg-slate-950 hover:bg-slate-800 disabled:opacity-40 text-white rounded-2xl text-xs font-black uppercase tracking-widest transition-all cursor-pointer flex items-center gap-1.5"
+                          >
+                            {couponChecking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Apply'}
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-slate-400 font-medium mt-1.5 ml-1">
+                          Referral coupons work only on monthly plans.
+                        </p>
+                      </div>
+                    )}
+
                     {/* Order breakdown */}
                     <div className="bg-slate-50 p-5 rounded-2xl space-y-3">
                       <div className="flex justify-between text-sm">
@@ -828,9 +928,15 @@ export function SubscriptionOnboardingModal({
                           <span className="font-bold">−₹{prorationCredit}</span>
                         </div>
                       )}
+                      {referralCoupon && couponDiscountPaise > 0 && (
+                        <div className="flex justify-between text-sm text-amber-700">
+                          <span className="font-medium">Referral Coupon ({(referralCoupon.discountPct)}%)</span>
+                          <span className="font-bold">−₹{Math.round(couponDiscountPaise / 100)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between items-center pt-1">
                         <span className="font-bold text-slate-900">Total Payable</span>
-                        <span className="text-xl font-black text-brand">₹{finalPrice}</span>
+                        <span className="text-xl font-black text-brand">₹{referralCoupon ? finalPriceWithCoupon : finalPrice}</span>
                       </div>
                     </div>
 

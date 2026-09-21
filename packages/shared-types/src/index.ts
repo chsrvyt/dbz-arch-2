@@ -36,6 +36,19 @@ export interface SelectedAddon {
 export interface AppUser {
   id: string;          // Firebase Auth UID
   name: string;
+  /**
+   * Server-assigned unique referral code (referral_codes/{code} registry).
+   * Assigned lazily by Cloud Functions; never written directly by the client.
+   */
+  referral_code?: string;
+  /**
+   * Referral code that invited THIS user. Immutable once set — only the
+   * server-side applyReferralCode callable may write it. Referral completion
+   * is credited when this user activates a subscription.
+   */
+  referred_by?: string;
+  /** True once this user's referral event is counted as completed. */
+  referral_completed?: boolean;
   phone: string;       // 10-digit, required for on-ground operations (set during onboarding)
   role: UserRole;
   email?: string;      // Provided from social auth (Google, Apple, Facebook)
@@ -297,6 +310,79 @@ export interface DiscountCode {
   active: boolean;
   vendor_id?: string;
   created_at: FirestoreTimestamp;
+  // ── Referral coupon fields ───────────────────────────────────────────────
+  /** 'referral' for milestone awards; vendor promo codes leave this undefined. */
+  source?: 'vendor' | 'referral';
+  /** Referral coupons only ever apply to monthly plans; server validates. */
+  plan_type?: 'weekly' | 'monthly' | 'one-time';
+  /** Owner of the coupon — server rejects any other caller. */
+  user_id?: string;
+  /** Milestone id this coupon was earned from (e.g. '3'). */
+  milestone?: string;
+  status?: 'available' | 'used';
+  used_at?: FirestoreTimestamp;
+  subscription_id?: string;
+}
+
+// ─── Referrals & Milestone Rewards ──────────────────────────────────────────
+
+export type ReferralStatus = 'pending' | 'completed' | 'rejected';
+
+export interface Referral {
+  id: string;
+  referrer_user_id: string;
+  referral_code: string;
+  referred_user_id: string;
+  referred_phone?: string;
+  status: ReferralStatus;
+  created_at: FirestoreTimestamp;
+  completed_at?: FirestoreTimestamp;
+  rejected_reason?: string;
+}
+
+/** Single reward tier: N successful referrals → discount% off a monthly plan. */
+export interface ReferralMilestone {
+  id: string;
+  threshold: number;
+  discount: number; // percent off
+}
+
+export type ReferralClaimStatus = 'available' | 'used';
+
+/**
+ * One-time claim of a milestone reward. The document id is
+ * `referral_milestone_claims/{userId}_{milestoneId}` which enforces the
+ * UNIQUE(user_id, milestone_id) constraint at the Firestore level.
+ */
+export interface ReferralMilestoneClaim {
+  id: string;
+  user_id: string;
+  milestone_id: string;
+  threshold: number;
+  discount_percentage: number;
+  coupon_code: string;
+  status: ReferralClaimStatus;
+  claimed_at: FirestoreTimestamp;
+  used_at?: FirestoreTimestamp;
+}
+
+/** Per-milestone status for the client dashboard (LO/UNLOCK/CLAIMED). */
+export interface ReferralMilestoneStatus {
+  id: string;
+  threshold: number;
+  discount: number;
+  unlocked: boolean;
+  claimed: boolean;
+  couponCode?: string;
+  couponStatus?: ReferralClaimStatus;
+}
+
+/** Server-computed payload for the "Refer & Earn" dashboard. */
+export interface ReferralDashboardData {
+  referralCode: string;
+  referralLink: string;
+  completedReferrals: number;
+  milestones: ReferralMilestoneStatus[];
 }
 
 // ─── Orders (Canonical DBZ V2 Schema - Prompt 1) ──────────────────────────────

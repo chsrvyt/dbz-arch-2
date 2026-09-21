@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useUiStore } from '@/store/uiStore';
 import { signInWithGoogle } from '@/lib/auth';
 import { resolveUserProfile, completeOnboarding, markPhonePromptShown } from '@/lib/queries/users';
+import { applyReferralCode } from '@/lib/queries/referrals';
 import { migrateSubscriptions } from '@/lib/queries/subscriptions';
 import type { UserRole } from '@/types';
 import type { User } from 'firebase/auth';
@@ -104,6 +105,14 @@ export default function LoginPage() {
       );
       setUser(user);
       addToast(`Welcome to Dabzzo, ${user.name || 'Foodie'}! 🎉`, 'success');
+
+      // Referral attribution: if this sign-up came from a ?ref=CODE link,
+      // record it server-side (fire-and-forget; server validates + dedupes).
+      const refCode = new URLSearchParams(window.location.search).get('ref');
+      if (refCode) {
+        try { await applyReferralCode(refCode); } catch { /* ignore */ }
+      }
+
       router.replace('/dashboard');
     } catch (err: unknown) {
       addToast(getErrorMessage(err) || 'Setup failed. Try again.', 'error');

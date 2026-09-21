@@ -1,6 +1,9 @@
 import * as functions from 'firebase-functions/v1';
 import * as admin from 'firebase-admin';
 
+// Import the server-side referral code generator (self-contained package).
+import { generateReferralCodeForFunctions } from './referralFunctions';
+
 // Triggered when a new user signs up
 export const onUserCreate = functions.auth.user().onCreate(async (user) => {
   try {
@@ -16,6 +19,28 @@ export const onUserCreate = functions.auth.user().onCreate(async (user) => {
       role: 'customer',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
+
+    // Allocate a unique referral code for the new user (best-effort).
+    let referralCode = '';
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const candidate = generateReferralCodeForFunctions();
+      try {
+        await admin.firestore().collection('referral_codes').doc(candidate).set({
+          user_id: user.uid,
+          created_at: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        referralCode = candidate;
+        break;
+      } catch {
+        // collision — try another
+      }
+    }
+    if (referralCode) {
+      await admin.firestore().collection('users').doc(user.uid).set(
+        { referral_code: referralCode },
+        { merge: true }
+      );
+    }
 
     functions.logger.info(`Successfully set default 'customer' role for user ${user.uid}`);
   } catch (error) {

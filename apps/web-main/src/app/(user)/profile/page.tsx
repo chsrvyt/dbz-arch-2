@@ -17,6 +17,7 @@ import { redeemCreditsForDays } from '@/lib/queries/swaps';
 import type { SubscriptionSwapAllowance } from '@/types';
 import { createRazorpayOrder, verifyPaymentSignature, loadRazorpayCheckoutScript } from '@/lib/razorpay';
 import { getErrorMessage } from '@dabzzo/shared-lib/errors';
+import { isSubscriptionActive, isSubscriptionExpired } from '@dabzzo/shared-lib/subscriptionEntitlement';
 
 export default function ProfilePage() {
   const user = useAuthStore((s) => s.user);
@@ -30,6 +31,7 @@ export default function ProfilePage() {
   const [totalCredits, setTotalCredits] = useState(0);
   const [creditHistory, setCreditHistory] = useState<any[]>([]);
   const [activeSubscriptions, setActiveSubscriptions] = useState<any[]>([]);
+  const [expiredSubscriptions, setExpiredSubscriptions] = useState<any[]>([]);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [selectedSubForPayment, setSelectedSubForPayment] = useState<any>(null);
   const [redeemingCredits, setRedeemingCredits] = useState(false);
@@ -66,14 +68,18 @@ export default function ProfilePage() {
       setCreditHistory(credits.sort((a, b) => (b.created_at?.seconds ?? 0) - (a.created_at?.seconds ?? 0)).slice(0, 5));
     });
 
-    // Listen to active subscriptions
+    // Listen to active subscriptions (entitlement-aware: expired-but-stored-
+    // active subs move to the "Expired — Renew" group).
     const qSubs = query(
       collection(db, 'subscriptions'),
       where('user_id', '==', user.id),
       where('status', '==', 'active')
     );
     const unsubSubs = onSnapshot(qSubs, (snap) => {
-      setActiveSubscriptions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const nowMs = Date.now();
+      const raw = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setExpiredSubscriptions(raw.filter((s: any) => isSubscriptionExpired(s, nowMs)));
+      setActiveSubscriptions(raw.filter((s: any) => isSubscriptionActive(s, nowMs)));
     });
 
     // Listen to swap allowances in real-time
@@ -269,6 +275,7 @@ export default function ProfilePage() {
   };
 
   const menuItems = [
+    { icon: '🎁', label: 'Refer & Earn', href: '/referrals' },
     { icon: '🎫', label: 'Support & Help', href: '/support' },
     { icon: '📦', label: 'My Subscriptions', href: '/orders' },
   ];
@@ -495,6 +502,47 @@ export default function ProfilePage() {
                       </div>
                     </div>
                   </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Expired Subscriptions — renew state */}
+      {expiredSubscriptions.length > 0 && (
+        <div className="bg-white rounded-3xl p-5 shadow-card mb-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-slate-900">Expired Subscriptions</h3>
+            <AlertCircle className="w-5 h-5 text-amber-500" />
+          </div>
+          <div className="space-y-4">
+            {expiredSubscriptions.map(sub => {
+              let currentNextBilling = sub.next_billing_date?.toDate?.();
+              const expiredOn = currentNextBilling
+                ? currentNextBilling.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                : '—';
+              return (
+                <div key={sub.id} className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-bold text-slate-900 capitalize">{sub.meal_type} Meal ({sub.frequency || 'weekly'})</span>
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                      Expired
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-amber-800/70 font-medium mb-3">
+                    Benefits ended on {expiredOn}. Renew to reactivate meals, tracking and rewards.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setSelectedSubForPayment(sub);
+                      setPaymentModalOpen(true);
+                    }}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-200 bg-amber-500 text-white hover:bg-amber-600 active:scale-95 shadow-md shadow-amber-500/20"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Renew Subscription
+                  </button>
                 </div>
               );
             })}

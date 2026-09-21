@@ -278,6 +278,185 @@ export async function getVendorTodayOrders(
     });
 }
 
+// ─── Status buckets for preparation counting ─────────────────────────────────
+const DISPATCHED_STATUSES = [
+  'rider_assigned', 'rider_en_route_pickup', 'dispatched', 'picked_up', 'out_for_delivery',
+];
+const DELIVERED_STATUSES = ['delivered'];
+const TERMINAL_EXCLUDED_STATUSES = ['completed', 'skipped', 'swapped_out', 'swapped_in', 'failed', 'cancelled'];
+
+/**
+ * "Today's Preparation" for a vendor — derived from REAL order documents.
+ * Uses the composite index orders(vendor_id, date) instead of fetching every
+ * historical order and filtering in memory.
+ *
+ * Because onSubscriptionCreated writes one document per tiffin (a 'both'
+ * subscription emits a lunch doc and a dinner doc), count of documents == count
+ * of tiffins. A document whose status is terminal (delivered/failed/cancelled/
+ * skipped/swapped/completed) is excluded from "needs preparation".
+ */
+export async function getVendorPrepSummary(
+  vendorId: string,
+  date: string
+): Promise<{
+  total: number;            // today's tiffins after prep (non-terminal)
+  needsPrep: number;        // not yet dispatched or delivered
+  lunch: number;
+  dinner: number;
+  dispatched: number;
+  delivered: number;
+  cancelled: number;
+  byStatus: Record<string, number>;
+}> {
+  const q = query(
+    collection(db, 'orders'),
+    where('vendor_id', '==', vendorId),
+    where('date', '==', date)
+  );
+
+  const snap = await getDocs(q);
+
+  if (snap.empty) {
+    // Legacy camelCase fallback (same shape, non-indexed)
+    const q2 = query(
+      collection(db, 'orders'),
+      where('vendorId', '==', vendorId),
+      where('date', '==', date)
+    );
+    const snap2 = await getDocs(q2);
+    return summarizeOrders(snap2.docs.map((d) => ({ id: d.id, ...d.data() })));
+  }
+
+  return summarizeOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+}
+
+function summarizeOrders(docs: any[]): ReturnType<typeof getVendorPrepSummary> extends Promise<infer T> ? T : never {
+  const byStatus: Record<string, number> = {};
+  let lunch = 0;
+  let dinner = 0;
+  let dispatched = 0;
+  let delivered = 0;
+  let cancelled = 0;
+
+  for (const o of docs) {
+    const status = String(o.status || 'created');
+    byStatus[status] = (byStatus[status] || 0) + 1;
+
+    const mealType = o.meal_type || o.mealType || o.meal?.type || o.scheduledSlot;
+    if (mealType === 'both') {
+      // A 'both' document represents one lunch + one dinner tiffin.
+      lunch += 1;
+      dinner += 1;
+    } else if (mealType === 'dinner' || mealType === '8pm') {
+      dinner += 1;
+    } else {
+      lunch += 1;
+    }
+
+    if (DISPATCHED_STATUSES.includes(status)) dispatched += 1;
+    if (DELIVERED_STATUSES.includes(status)) delivered += 1;
+    if (status === 'cancelled') cancelled += 1;
+  }
+
+  const needsPrep = docs.filter((o) =>
+    !TERMINAL_EXCLUDED_STATUSES.includes(String(o.status || 'created'))
+  ).length;
+
+  return {
+    total: docs.length,
+    needsPrep,
+    lunch,
+    dinner,
+    dispatched,
+    delivered,
+    cancelled,
+    byStatus,
+  };
+}
+
+/**
+ * "Today's Preparation" — drill-down version of getVendorPrepSummary.
+ * Returns the REAL order documents for the vendor's date so the vendor panel
+ * can render a per-order breakdown (customer, meal, status, rider) instead of
+ * only aggregate counts.
+ */
+export interface VendorPrepOrderRow {
+  id: string;
+  status: string;
+  mealType: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  addressLine: string | null;
+  vendorName: string | null;
+  riderName: string | null;
+  boxTag: string | null;
+  createdAtMs: number | null;
+}
+
+export async function getVendorPrepDetails(
+  vendorId: string,
+  date: string
+): Promise<{
+  rows: VendorPrepOrderRow[];
+  total: number;
+  byStatus: Record<string, number>;
+}> {
+  const q = query(
+    collection(db, 'orders'),
+    where('vendor_id', '==', vendorId),
+    where('date', '==', date)
+  );
+
+  const snap = await getDocs(q);
+  if (snap.empty) {
+    const q2 = query(
+      collection(db, 'orders'),
+      where('vendorId', '==', vendorId),
+      where('date', '==', date)
+    );
+    const snap2 = await getDocs(q2);
+    return buildPrepRows(snap2.docs.map((d) => ({ id: d.id, ...d.data() })));
+  }
+
+  return buildPrepRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+}
+
+function buildPrepRows(docs: any[]): ReturnType<typeof getVendorPrepDetails> extends Promise<infer T> ? T : never {
+  const byStatus: Record<string, number> = {};
+  const rows: VendorPrepOrderRow[] = docs.map((o) => {
+    const status = String(o.status || 'created');
+    byStatus[status] = (byStatus[status] || 0) + 1;
+
+    let createdAtMs: number | null = null;
+    const createdAt = o.created_at || o.createdAt;
+    if (createdAt instanceof Date) createdAtMs = createdAt.getTime();
+    else if (typeof createdAt?.toDate === 'function') createdAtMs = createdAt.toDate().getTime();
+    else if (createdAt?.seconds) createdAtMs = createdAt.seconds * 1000;
+    else if (createdAt?._seconds) createdAtMs = createdAt._seconds * 1000;
+    else if (typeof createdAt === 'string' || typeof createdAt === 'number') {
+      const t = new Date(createdAt).getTime();
+      createdAtMs = Number.isNaN(t) ? null : t;
+    }
+
+    return {
+      id: o.id,
+      status,
+      mealType: o.meal_type || o.mealType || o.meal?.type || o.scheduledSlot || null,
+      customerName: o.customer_name || o.customerName || o.userName || null,
+      customerPhone: o.customer_phone || o.customerPhone || o.phone || null,
+      addressLine: o.address?.line1 || o.delivery_address?.line1 ||
+        (typeof o.delivery_address === 'string' ? o.delivery_address : null) || null,
+      vendorName: o.vendor_name || o.vendorName || null,
+      riderName: o.rider_name || o.riderName || o.agentName || null,
+      boxTag: o.box_tag || o.boxTag || null,
+      createdAtMs,
+    };
+  });
+
+  rows.sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
+  return { rows, total: rows.length, byStatus };
+}
+
 /**
  * Dynamically updates the status of a delivery order and automatically logs corresponding event timestamps.
  * Also synchronizes the driver's current position to the order document once transit begins.

@@ -6,6 +6,94 @@ Format per entry: date, phase, files added/changed/removed, and the reason — e
 
 ---
 
+## 2026-09-22 — Phase 26: product hardening — delivery-transition integrity, one order lifecycle, vendor/rider ops drill-down
+
+Post-plan product run continuing from 2026-09-21. This pass hardened the delivery lifecycle end to end: the rider callable can no longer set arbitrary statuses, the Track page and order lists agree with one shared status model, the expiry sweep is auditable, the vendor gets a real order drill-down, and the rider IDLE queue is sorted and labelled.
+
+### 1. P0 — `updateDeliveryStatus` target whitelist
+
+`functions/src/deliveryTriggers.ts`: the rider callable previously validated *transitions* only when the requested status matched one of four guards — any OTHER value (including canonical-but-wrong statuses like `cancelled`, `ready`, arbitrary garbage) fell straight through to a blind Firestore `update` with that status. Verified possible: `DELIVERED → ASSIGNED`/`PREPARING` etc. Now the four rider-legitimate statuses (`picked_up`, `out_for_delivery`, `delivered`, `failed_attempt`) are whitelisted up front and anything else throws `invalid-argument` before any read/write. (The `picked_up` guard keeps its `pending`/`created` prestates — the direct "mark picked up" flow relies on it.) `verifyDeliveryOTP` remains the OTP-gated path to `delivered`.
+
+### 2. Single order-lifecycle source of truth
+
+New `packages/shared-lib/src/orderLifecycle.ts` (`./orderLifecycle` export) — the canonical 20-status vocabulary, plus sets and helpers every panel was hand-rolling differently:
+
+- `LIVE_TRACKING_STATUSES` — includes every pre-dispatch stage (`created`, `pending`, `vendor_notified`, `vendor_preparing`, `cooking`, `vendor_ready`, `ready`, `dispatched`, `rider_assigned`, `rider_en_route_pickup`, `picked_up`, `out_for_delivery`, plus defensive `preparing`/`picking_up`).
+- `DELIVERED_STATUSES`, `INACTIVE_STATUSES`, `ACTIVE_ORDER_STATUSES`, `ORDER_STATUS_LABELS`, `statusToLifecycleStage()` (maps every status onto the 5-step customer timeline), `isLiveStatus`, `isDeliveredStatus`, `isInactiveStatus`.
+
+**Customers (web-main):** `track/page.tsx` + `orders/page.tsx` stopped carrying their own live-status lists. The Track page previously skipped `created`/`ready` etc. → a real today-dated order rendered **"No Active Delivery"**; now any non-terminal today order draws the live timeline. Also fixed a second Track bug: a failing orders/subscriptions/direct-order listener left `loading=true` forever (permanent spinner) because only the *next* callback cleared it — error callbacks now drop through to `setLoading(false)` / last-known data. `RiderTrackingCard.tsx` maps every canonical status onto its 5 steps via the shared helper (no more raw-status pills for unknown statuses) and gained per-status cycling messages.
+
+### 3. Auditable expiry sweep
+
+New `functions/src/auditUtils.ts` — `writeAuditLog()` appends to `audit_logs` writing both snake_case (server/legacy) and camelCase (client) keys with server timestamps. `expireSubscriptions` now records one `subscription.expiry.sweep` entry per run (expired count, affected user ids, `sweepRunId`) and a `subscription.expiry.user_clear` entry for every user whose entitlement flags were wiped — so audit_logs finally covers automated system mutations, not just admin callables.
+
+### 4. Vendor panel — real order drill-down
+
+`packages/shared-queries/src/delivery.ts` gained `getVendorPrepDetails(vendorId, date)` returning the underlying order rows (customer, meal, status, address, rider, box tag, created-at), reusing the `vendor_id + date` composite query. `apps/vendor-panel/.../dashboard/page.tsx`: the prep-breakdown card now has a **View Orders** button → bottom-sheet modal listing today's tiffins sorted newest-first with status chips, call buttons and rider info, plus an amber "cancelled/skipped need attention" line. Removed six dead icon imports (`Sliders`, `RefreshCw`, `ShieldCheck`, `Clock`, `ArrowUpRight` — lint now clean for that file).
+
+### 5. Rider panel — ordered, labelled queue
+
+`apps/rider-panel/.../dashboard/page.tsx`: the IDLE "Your Assigned Deliveries" queue is now sorted (in-flight by stage first, terminal pushed last), the first remaining stop gets a **NEXT** badge + brand highlight, the header shows `N to go / M done / failed`, and every icon-only control (queue call/map, kitchen call/navigate, drop navigation, profile photo, logout) gained `aria-label`s next to its existing `title`.
+
+### 6. Tests
+
+`functions/src/__tests__/deliveryTriggers.test.ts`: +3 tests pinning the whitelist (`cancelled`, `rider_assigned`, `ready` all rejected with `Cannot set delivery status to …`). New `functions/src/__tests__/auditUtils.test.ts` (2 tests): full audit payload shape (snake+camel keys, merge, timestamps) and nulled optional fields. **152/152 functions tests pass** (was 147); all apps + packages typecheck; lint 0 errors.
+
+### Files
+
+- Changed: `functions/src/deliveryTriggers.ts`, `functions/src/subscriptionExpiry.ts`, `packages/shared-lib/package.json`, `packages/shared-queries/src/delivery.ts`, `apps/web-main/src/app/(user)/track/page.tsx`, `apps/web-main/src/app/(user)/orders/page.tsx`, `apps/web-main/src/components/delivery/RiderTrackingCard.tsx`, `apps/vendor-panel/src/app/dashboard/page.tsx`, `apps/rider-panel/src/app/dashboard/page.tsx`, `functions/src/__tests__/deliveryTriggers.test.ts`
+- Added: `packages/shared-lib/src/orderLifecycle.ts`, `functions/src/auditUtils.ts`, `functions/src/__tests__/auditUtils.test.ts`
+- No removals.
+
+Post-plan product run (not part of the Phase 0–6 plan). One coherent logical fix carried across server, shared client library, and every panel, plus the assigned-delivery rider view, a real vendor "today's preparation" tiffin count, and cross-tenant read-rule closure.
+
+### 1. The bug: an expired subscription kept functioning
+
+`next_billing_date` was written at subscription creation, but nothing anywhere compared `now` against it at runtime. Every UI (dashboard, orders, track, vendor, storefront), every callable, and the order-generation triggers all keyed off `status === 'active'` only — so a subscription whose billing date had passed months ago still worked forever.
+
+**Fix — entitlement becomes a computed invariant (single source of truth):**
+
+- `functions/src/subscriptionExpiry.ts` — `getSubscriptionExpiryMs()` (aliases: `next_billing_date`, `nextBillingDate`, `end_date`, `valid_until`; accepts Timestamp / `{_seconds}` / Date / ISO string / epoch ms), `isSubscriptionActive()`, `isSubscriptionExpired()` (`now >= next_billing_date` → expired; **exactly-at is expired**; missing end date → not expired as a legacy safety), `getSubscriptionAccessRecord(db, subId)`, and `expireSubscriptions` — an hourly IST scheduler (`'30 * * * *'`, `Asia/Kolkata`) that paginates subscriptions, flips status → `cancelled` with `cancelled_by: 'system_expiry'`, and clears the user's `has_active_subscription` / `subscription_id` flags. Registered in `index.ts`.
+- `functions/src/deliveryTriggers.ts` — `onSubscriptionCancelled` now cascades any non-terminal future order (statuses `created`, `pending`, `preparing`, `vendor_notified`, `vendor_preparing`, `vendor_ready`, `rider_assigned`, `rider_en_route_pickup`, `ready`, `cooking`, `dispatched`) to cancelled. In-flight `picked_up` / `out_for_delivery` orders are left to finish; terminal statuses untouched. This is the single cancel path — the sweep flips the subscription, the trigger cascades the orders.
+- Callables guarded on live entitlement (`failed-precondition` when inactive): `skipMealOrder`, `undoSkipMealOrder` (`deliveryTriggers.ts`, v2 HttpsError), `requestMealSwap` (`swapFunctions.ts`, v1) — a MEAL SWAP on an expired subscription now fails instead of silently rescheduling another customer's meal.
+- `packages/shared-lib/src/subscriptionEntitlement.ts` **new** + `./subscriptionEntitlement` export — client mirror of `getSubscriptionExpiryMs` / `isSubscriptionActive` / `isSubscriptionExpired` / `getSubscriptionAccess` / `getCustomerAccessState`, so every app computes the SAME answer the server does, offline.
+- `packages/shared-queries/src/subscriptions.ts` — adds `getActiveSubscriptionsFor(userId)` and `getCustomerEntitlement(userId)`; `getVendorSubscriptions` now entitlement-filters.
+
+**UI wiring (web-main):** dashboard (delivery card gated on active sub; orders listener date-filtered to today), orders (Track banner + new amber RENEW banner when any sub needs renewal → `/track`; inline map gated), track (`renderRenewBanner` → `/profile` in both the empty state and the main header), profile (new "Expired Subscriptions" section with Renew buttons opening the PaymentModal), rewards + vendor detail counts, and `SubscriptionManager` / `SubscriptionOnboardingModal` / `MonthlyCustomPlanBuilder` all filter by entitlement rather than raw status.
+
+### 2. Rider panel: assigned deliveries surfaced
+
+The IDLE branch was a blank "no active trip" canvas while the squadded drop-stops list was hidden behind an already-started trip. Now: per-stop `DeliveryCard`s gain an order chip `#<order-id-last-8>`, the current drop header shows the full order id, and IDLE renders a "Your Assigned Deliveries" queue — customer, address, order/meal, status chip, `tel:` call link, and a Google Maps deep link. (`apps/rider-panel/src/app/dashboard/page.tsx`)
+
+### 3. Vendor panel: "Today's Preparation" from real orders
+
+Replaced the static metric with `getVendorPrepSummary(vendorId, date)` + `summarizeOrders` in `packages/shared-queries/src/delivery.ts` — a composite `vendor_id + date` query (camelCase fallback for legacy docs) counting needs-prep tiffins (non-terminal), lunch/dinner split (`meal_type 'both'` counts +1 lunch +1 dinner), dispatched/delivered/cancelled, and a per-status breakdown. New composite index `orders(vendor_id, date)` added to `packages/firestore-rules/firestore.indexes.json`. Dashboard polls every 60 s and shows "Today's Preparation" + a live per-status chips strip.
+
+### 4. Rules hardening (cross-tenant reads closed)
+
+`orders` list/get previously granted **every verified rider/vendor read access to the entire orders collection** (all customers' names, addresses and OTPs); `subscriptions.list` allowed **any authenticated user** to list all subscriptions; `deliveries.list` had the same blanket role gates. All three now require the doc to name the caller as a participant (`resource.data` field match) or admin. (`packages/firestore-rules/firestore.rules`)
+
+### 5. Tests
+
+- `functions/src/__tests__/subscriptionExpiry.test.ts` **new**: expiry-boundary pinning (before / exactly-at → expired / after; legacy no-end-date; field aliases; status guard) + `getSubscriptionAccessRecord` with a mocked db.
+- `functions/src/__tests__/swapFunctions.test.ts` — updated the firebase-admin mock to give `subscriptions` its own (valid, active) doc so the entitlement guard is exercised rather than blasting every swap case.
+- `packages/firestore-rules/rules.test.mjs` — 8 new cases: order get own/other, rider scoped get, unscoped rider orders scan denied, rider deliveries list (scoped succeed, bare scan denied), customer deliveries, vendor subscriptions (own-only list, bare scan + get-other denied). All 34 pass against the emulator.
+
+**Verified:** `npm run verify` — typecheck (apps + packages) ✅, typecheck:functions ✅, lint (apps + packages) ✅, functions tests 147/147 ✅; `npm run test:rules` 34/34 ✅.
+
+### Files
+
+| Area | Files |
+|---|---|
+| Functions | `functions/src/subscriptionExpiry.ts`, `functions/src/deliveryTriggers.ts`, `functions/src/swapFunctions.ts`, `functions/src/index.ts`, `functions/src/__tests__/subscriptionExpiry.test.ts` (new), `functions/src/__tests__/swapFunctions.test.ts` |
+| Shared | `packages/shared-lib/src/subscriptionEntitlement.ts` (new), `packages/shared-lib/package.json`, `packages/shared-queries/src/subscriptions.ts`, `packages/shared-queries/src/delivery.ts` |
+| Rules | `packages/firestore-rules/firestore.rules`, `packages/firestore-rules/firestore.indexes.json`, `packages/firestore-rules/rules.test.mjs` |
+| web-main | `apps/web-main/src/app/(user)/{dashboard,orders,track,profile,rewards}/page.tsx`, `apps/web-main/src/app/(user)/vendor/detail/page.tsx`, `apps/web-main/src/components/subscription/{SubscriptionManager,SubscriptionOnboardingModal,MonthlyCustomPlanBuilder}.tsx` |
+| vendor-panel | `apps/vendor-panel/src/app/dashboard/page.tsx` |
+| rider-panel | `apps/rider-panel/src/app/dashboard/page.tsx` |
+
+---
+
 ## 2026-09-15 — web-main Track Meal page overhaul + repo-wide Razorpay build blocker fixed
 
 Post-plan work (adds to the completed Phase 1–6 status, not part of any phase). Two independent work streams in one session:

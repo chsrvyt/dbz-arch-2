@@ -11,6 +11,7 @@ import { getVendorReviews, addReview, editReview } from '@/lib/queries/reviews';
 import { getDocs, collection, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { getUserSubscriptions } from '@/lib/queries/subscriptions';
+import { isSubscriptionActive } from '@dabzzo/shared-lib/subscriptionEntitlement';
 import { validateDiscountCode } from '@/lib/queries/discounts';
 import { getImageUrl } from '@/lib/storage';
 import { formatDate, cn } from '@/lib/utils';
@@ -116,12 +117,15 @@ export default function VendorDetailPage() {
         console.warn('Could not load today menu:', err);
       }
 
-      // Fetch Vendor Active Subscriptions Count
+      // Fetch Vendor Active Subscriptions Count (entitlement-aware)
       try {
         const subsSnap = await getDocs(
           query(collection(db, 'subscriptions'), where('vendor_id', '==', vendorId), where('status', '==', 'active'))
         );
-        setTotalActiveSubs(subsSnap.size);
+        const nowMs = Date.now();
+        setTotalActiveSubs(
+          subsSnap.docs.filter((d) => isSubscriptionActive(d.data() as any, nowMs)).length
+        );
       } catch (err) {
         console.warn('Could not fetch active subs count:', err);
       }
@@ -130,7 +134,7 @@ export default function VendorDetailPage() {
       if (user) {
         const mySubs = await getUserSubscriptions(user.id);
         const activeVendorSubs = mySubs
-          .filter((s) => s.vendor_id === vendorId && s.status === 'active')
+          .filter((s) => s.vendor_id === vendorId && isSubscriptionActive(s as any))
           .map((s) => s.meal_type);
         setUserSubs(activeVendorSubs);
       }

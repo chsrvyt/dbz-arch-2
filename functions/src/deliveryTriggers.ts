@@ -3,6 +3,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
 import { publishEvent } from './utils/events';
+import { getSubscriptionAccessRecord } from './subscriptionExpiry';
 
 /**
  * Cloud Function triggered on every updates in a canonical order document.
@@ -70,6 +71,19 @@ export const updateDeliveryStatus = onCall(async (request) => {
   const { orderId, status, reason } = data;
   if (!orderId || !status) {
     throw new HttpsError('invalid-argument', 'Missing orderId or status');
+  }
+
+  // Whitelist the ONLY statuses a rider callable may ever set. Without this,
+  // any caller could request arbitrary/canonical-but-invalid transitions
+  // (e.g. DELIVERED -> ASSIGNED, or non-delivery statuses like 'cancelled').
+  // The `picked_up` transition guard permits starts from 'pending'/'created',
+  // which AdmissionBar's direct mark-picked-up flow relies on.
+  const DELIVERY_TARGET_STATUSES = ['picked_up', 'out_for_delivery', 'delivered', 'failed_attempt'];
+  if (!DELIVERY_TARGET_STATUSES.includes(String(status))) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Cannot set delivery status to "${status}" — only rider delivery statuses are allowed`
+    );
   }
 
   const db = admin.firestore();
@@ -1302,9 +1316,17 @@ export const onSubscriptionCancelled = onDocumentUpdated('subscriptions/{subId}'
   console.log(`[onSubscriptionCancelled] Cancelling future orders for sub ${subId}`);
 
   // Find all pending/preparing orders for this subscription
+  // All non-terminal statuses except in-flight deliveries (picked_up /
+  // out_for_delivery are left to finish; they were dispatched inside the
+  // paid window). `completed`/`delivered`/`failed`/`skipped`/`swapped_*` are
+  // terminal-sentinel and must keep their record.
   const ordersSnap = await db.collection('orders')
     .where('subscription_id', '==', subId)
-    .where('status', 'in', ['created', 'pending', 'preparing'])
+    .where('status', 'in', [
+      'created', 'pending', 'preparing', 'vendor_notified', 'vendor_preparing',
+      'vendor_ready', 'rider_assigned', 'rider_en_route_pickup', 'ready', 'cooking',
+      'dispatched'
+    ])
     .get();
 
   if (ordersSnap.empty) {
@@ -1542,6 +1564,18 @@ export const skipMealOrder = onCall(async (request) => {
     throw new HttpsError('failed-precondition', `Cannot skip order that is ${orderData.status}.`);
   }
 
+  // Entitlement guard: a skipped meal is a benefit of an active subscription.
+  const skipSubId = (subscriptionId as string) || orderData.subscription_id || orderData.subscriptionId || '';
+  if (skipSubId) {
+    const access = await getSubscriptionAccessRecord(db, skipSubId);
+    if (!access.active) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Your subscription is expired or inactive — renew it to skip meals.'
+      );
+    }
+  }
+
   // Calculate cutoff & credit amount
   const creditsEarned = 1.0;
 
@@ -1638,6 +1672,18 @@ export const undoSkipMealOrder = onCall(async (request) => {
 
   if (orderData.status !== 'skipped') {
     throw new HttpsError('failed-precondition', 'Order is not in skipped status.');
+  }
+
+  // Entitlement guard — undo-skip is a benefit of an active subscription.
+  const undoSubId = orderData.subscription_id || orderData.subscriptionId || '';
+  if (undoSubId) {
+    const access = await getSubscriptionAccessRecord(db, undoSubId);
+    if (!access.active) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Your subscription is expired or inactive — renew it to restore skipped meals.'
+      );
+    }
   }
 
   const batch = db.batch();

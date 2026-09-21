@@ -1,5 +1,6 @@
 import * as functions from 'firebase-functions/v1';
 import * as admin from 'firebase-admin';
+import { getSubscriptionAccessRecord } from './subscriptionExpiry';
 
 /**
  * Server-side Cloud Function: Request a meal swap.
@@ -37,6 +38,15 @@ export const requestMealSwap = functions.https.onCall(async (data, context) => {
 
   if (['cancelled', 'skipped', 'delivered', 'picked_up'].includes(orderData.status)) {
     throw new functions.https.HttpsError('failed-precondition', `Order cannot be swapped in '${orderData.status}' status.`);
+  }
+
+  // Entitlement guard: swapping is a benefit of an active subscription.
+  const access = await getSubscriptionAccessRecord(db, subscriptionId);
+  if (!access.active) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Your subscription is expired or inactive — renew it to request a meal swap.'
+    );
   }
 
   // If vendor swap requested, update vendor_id on order directly via Admin SDK

@@ -21,6 +21,20 @@ This document is the single source of truth for the work. Every phase lists exac
 
 **`npm run verify` right now:** typecheck ✅ (apps + packages), functions typecheck ✅, lint ❌ (known), functions tests ✅ **99/99**. All 5 apps build.
 
+### Update — 2026-09-22 (Phase 26: product hardening)
+
+- **Delivery-transition integrity (P0).** The rider callable `updateDeliveryStatus` accepted any status string and blind-wrote it when it didn't match a transition guard — verified `DELIVERED → ASSIGNED` etc. was possible. Target statuses are now whitelisted to the four rider-legitimate ones (`picked_up`, `out_for_delivery`, `delivered`, `failed_attempt`) with an `invalid-argument` rejection before any read/write.
+- **One order-lifecycle source of truth.** New `packages/shared-lib/src/orderLifecycle.ts` supplies the canonical status sets (`LIVE_TRACKING_STATUSES`, `DELIVERED_STATUSES`, `INACTIVE_STATUSES`, `ACTIVE_ORDER_STATUSES`), `ORDER_STATUS_LABELS`, `statusToLifecycleStage()`, `isLiveStatus`/`isDeliveredStatus`/`isInactiveStatus`. `track/page.tsx` (previously showed "No Active Delivery" for `created`/`ready` orders and could hang on a failing listener) and `orders/page.tsx` now use it; `RiderTrackingCard` maps all canonical statuses onto its 5 steps.
+- **Expiry sweep is auditable.** `auditUtils.writeAuditLog()` (new) appends snake+camel payloads; `expireSubscriptions` logs `subscription.expiry.sweep` per run + `subscription.expiry.user_clear` per user.
+- **Vendor + rider ops surface** (from 2026-09-21, now drilled down): `getVendorPrepDetails()` inventory + View-Orders modal with per-order status chips / rider / call links; rider IDLE queue sorted with NEXT badge, "N to go / M done / failed" summary, and `aria-label`s on all icon-only controls.
+- **`npm run verify` right now:** typecheck (apps + packages) ✅, functions typecheck ✅, lint (apps + packages) ✅ (0 errors), functions tests ✅ **152/152** (+5: 3 whitelist-pin, 2 auditUtils). Full CHANGELOG entry under **2026-09-22**.
+
+### Update — 2026-09-21 (post-plan product run)
+
+- **Subscription expiry is now enforced at runtime.** The expired-subscription-still-active bug is fixed at the logic level: server + client share one entitlement invariant (`now < next_billing_date` ⇒ active; exactly-at ⇒ expired) in `functions/src/subscriptionExpiry.ts` and `packages/shared-lib/src/subscriptionEntitlement.ts`. An hourly IST sweep cancels over-due subscriptions (`cancelled_by: 'system_expiry'`) and `onSubscriptionCancelled` cascades their future orders; `skipMealOrder` / `undoSkipMealOrder` / `requestMealSwap` reject inactive subscriptions. All customer panels (dashboard/orders/track/profile/rewards/vendor detail, plus the three subscription components), the rider "Your Assigned Deliveries" IDLE view, and the vendor "Today's Preparation" real-order count shipped on top.
+- **Cross-tenant read rules closed.** `orders`, `deliveries` and `subscriptions` list/get no longer grant blanket rider/vendor access to every tenant's data — reads are participant-only (`resource.data` must name the caller) unless admin.
+- **`npm run verify` right now:** typecheck (apps + packages) ✅, functions typecheck ✅, lint (apps + packages) ✅, functions tests ✅ **147/147**. `npm run test:rules` ✅ **34/34**. Full CHANGELOG entry under 2026-09-21.
+
 ### Update — 2026-09-15 (post-plan additions)
 
 - **Repo-wide build blocker cleared.** The duplicate `declare global { Window.Razorpay }` in every app's `src/hooks/useRazorpay.ts` (non-optional, ×4) collided with the canonical optional declaration in `packages/shared-types` → `TS2687`/`TS2717` on every `tsc` and every `next build` in the repo. Per-app duplicates removed; 3 non-web apps (admin/vendor/rider) got a null-guard before `new window.Razorpay` since the canonical property is optional; web-main already used `(window as any)`. Typecheck and all 5 static-export builds now pass. See CHANGELOG 2026-09-15.

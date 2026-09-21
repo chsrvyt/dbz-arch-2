@@ -22,19 +22,45 @@ jest.mock('firebase-admin', () => {
     update: (d: any) => mockOrderUpdate(d),
     set: (d: any) => mockDocSet(d),
   };
-  const collection: any = {
-    doc: jest.fn(() => orderDoc),
-    where: jest.fn(() => collection),
-    limit: jest.fn(() => collection),
-    get: jest.fn(() =>
-      Promise.resolve({ docs: [], empty: true, size: 0, forEach: (_f: any) => undefined })
-    ),
-    add: jest.fn(() => Promise.resolve({ id: 'new_doc' })),
+  // Entitlement guard reads the subscription doc before allowing a swap; stub
+  // it as a valid ACTIVE subscription with a far-future end date.
+  const subDoc = {
+    id: 's1',
+    get: () =>
+      Promise.resolve({
+        exists: true,
+        data: () => ({
+          status: 'active',
+          next_billing_date: { _seconds: 4102444800, _nanoseconds: 0 }, // way past today
+        }),
+      }),
+    update: jest.fn(() => Promise.resolve()),
+    set: jest.fn(() => Promise.resolve()),
+  };
+  const makeCollection: any = (name: string) => {
+    if (name === 'subscriptions') {
+      return {
+        doc: jest.fn(() => subDoc),
+        where: jest.fn(),
+        get: jest.fn(() =>
+          Promise.resolve({ docs: [], empty: true, size: 0, forEach: (_f: any) => undefined })
+        ),
+      };
+    }
+    return {
+      doc: jest.fn(() => orderDoc),
+      where: jest.fn(() => makeCollection(name)),
+      limit: jest.fn(() => makeCollection(name)),
+      get: jest.fn(() =>
+        Promise.resolve({ docs: [], empty: true, size: 0, forEach: (_f: any) => undefined })
+      ),
+      add: jest.fn(() => Promise.resolve({ id: 'new_doc' })),
+    };
   };
   return {
     firestore: Object.assign(
       jest.fn(() => ({
-        collection: jest.fn(() => collection),
+        collection: jest.fn((name: string) => makeCollection(name)),
         runTransaction: jest.fn((cb: any) =>
           cb({ get: jest.fn(), set: jest.fn(), update: jest.fn() })
         ),

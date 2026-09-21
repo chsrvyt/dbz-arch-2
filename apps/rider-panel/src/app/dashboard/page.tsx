@@ -574,6 +574,7 @@ export default function RiderDashboard() {
               onClick={() => fileInputRef.current?.click()}
               className="relative w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm shadow-xs overflow-hidden shrink-0 border border-slate-100"
               title="Change Profile Photo"
+              aria-label="Change profile photo"
             >
               {user?.image ? (
                 <Image src={getImageUrl(user.image)} alt={user.name || ''} fill className="object-cover" />
@@ -612,6 +613,7 @@ export default function RiderDashboard() {
               onClick={() => logout()} 
               className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 bg-slate-50 border border-slate-200/80 rounded-2xl transition-colors" 
               title="Log Out"
+              aria-label="Log out"
             >
               <LogOut size={16} />
             </button>
@@ -702,6 +704,7 @@ export default function RiderDashboard() {
           </button>
         </div>
       ) : currentState === 'IDLE' ? (
+        <div className="space-y-3">
         <div className="bg-white rounded-3xl p-8 flex flex-col items-center justify-center text-center border border-slate-200/80 shadow-xs space-y-4">
           <div className="relative">
             <div className="w-16 h-16 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-center text-brand">
@@ -720,6 +723,128 @@ export default function RiderDashboard() {
             <p className="text-xs font-bold text-slate-900">{shiftWindow.slot} ({shiftWindow.time})</p>
             <p className="text-[10px] text-emerald-600 font-bold">Battery-Smart GPS: Geolocation paused to save battery until run starts</p>
           </div>
+        </div>
+
+        {/* Assigned queue — deliveries already assigned to this rider for today */}
+        {agentOrders.length > 0 && (
+          <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-black text-sm text-slate-900 flex items-center gap-2">
+                <ListOrdered className="w-4 h-4 text-brand" /> Your Assigned Deliveries
+              </h3>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {(() => {
+                  const done = agentOrders.filter(o => o.status === 'delivered').length;
+                  const failed = agentOrders.filter(o => o.status === 'failed').length;
+                  const inFlight = agentOrders.length - done - failed;
+                  return (
+                    <>
+                      <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                        {inFlight} to go
+                      </span>
+                      <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
+                        {done} done
+                      </span>
+                      {failed > 0 && (
+                        <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full bg-red-100 text-red-700">
+                          {failed} failed
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+            <div className="space-y-2.5">
+              {(() => {
+                // Queue in driver-ready priority order: furthest along first,
+                // terminal statuses (delivered/cancelled/failed) pushed to the
+                // bottom so the rider always sees the NEXT stop on top.
+                const queueOrderRank: Record<string, number> = {
+                  out_for_delivery: 1,
+                  picked_up: 2,
+                  rider_en_route_pickup: 3,
+                  picking_up: 4,
+                  rider_assigned: 5,
+                  vendor_ready: 6,
+                  ready: 7,
+                  dispatched: 8,
+                  preparing: 9,
+                  vendor_preparing: 10,
+                  vendor_notified: 11,
+                  cooking: 12,
+                  created: 13,
+                  pending: 14,
+                };
+                const sortedQueue = [...agentOrders].sort((a, b) => {
+                  const aTerminal = ['delivered', 'failed', 'cancelled'].includes(a.status) ? 1 : 0;
+                  const bTerminal = ['delivered', 'failed', 'cancelled'].includes(b.status) ? 1 : 0;
+                  if (aTerminal !== bTerminal) return aTerminal - bTerminal;
+                  return (queueOrderRank[a.status] ?? 20) - (queueOrderRank[b.status] ?? 20);
+                });
+                const firstNext = sortedQueue.find(o => !['delivered', 'failed', 'cancelled'].includes(o.status));
+
+                return sortedQueue.map((order: any) => {
+                const custId = order.customerId || order.user_id || '';
+                const cust = customerProfiles[custId];
+                const addressData = order.address || order.delivery_address;
+                const lat = addressData?.lat;
+                const lng = addressData?.lng;
+                const phone = cust?.phone || order.customerPhone;
+                const isDone = order.status === 'delivered';
+                const isInFlight = order.status !== 'delivered' && order.status !== 'failed' && order.status !== 'cancelled';
+                const isNext = !!firstNext && firstNext.id === order.id;
+                const mapHref = lat && lng
+                  ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`
+                  : (addressData?.line1 || cust?.address)
+                    ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addressData?.line1 || cust?.address || '')}`
+                    : null;
+
+                return (
+                  <div key={`queue-${order.id}`} className={`rounded-2xl border p-3.5 flex items-start gap-3 ${isDone ? 'bg-slate-50/70 border-slate-200/60 opacity-70' : isNext ? 'bg-brand/[0.04] border-brand/40 ring-1 ring-brand/20' : 'bg-white border-slate-200/80'}`}>
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-[10px] font-black shrink-0 ${isDone ? 'bg-emerald-100 text-emerald-700' : isNext ? 'bg-brand text-white' : 'bg-slate-900 text-white'}`}>
+                      {isDone ? <CheckCircle2 className="w-4 h-4" /> : '#'.concat(order.id?.slice(-5) || '—')}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="font-black text-[13px] text-slate-900 leading-tight truncate">
+                          {cust?.name || `Customer ${custId.slice(-4)}`}
+                        </p>
+                        <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full ${isDone ? 'bg-emerald-100 text-emerald-700' : isInFlight ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {isDone ? 'Delivered' : isInFlight ? order.status?.replace(/_/g, ' ') : order.status}
+                        </span>
+                        {isNext && (
+                          <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-brand text-white">
+                            Next
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                        {addressData?.line1 || cust?.address || 'Doorstep Address'}
+                      </p>
+                      <p className="text-[10px] font-mono text-slate-400 mt-0.5">
+                        #{order.id} · {order.meal_type || order.meal?.type || order.scheduledSlot || '—'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {phone && (
+                        <a href={`tel:${phone}`} aria-label="Call customer" className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center active:scale-95 transition-all" title="Call Customer">
+                          <Phone className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                      {mapHref && (
+                        <a href={mapHref} target="_blank" rel="noopener noreferrer" aria-label="Open in Google Maps" className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center active:scale-95 transition-all" title="Open in Google Maps">
+                          <Navigation className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                );
+                });
+              })()}
+            </div>
+          </div>
+        )}
         </div>
       ) : viewTab === 'itinerary' ? (
         <div className="space-y-3">
@@ -781,6 +906,7 @@ export default function RiderDashboard() {
                           href={`tel:${phone}`}
                           className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center active:scale-95 transition-all shadow-xs"
                           title="Call Kitchen"
+                          aria-label="Call kitchen"
                         >
                           <Phone className="w-4 h-4" />
                         </a>
@@ -791,6 +917,7 @@ export default function RiderDashboard() {
                         disabled={isNavigatingThis}
                         className="w-9 h-9 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 flex items-center justify-center active:scale-95 transition-all shadow-xs cursor-pointer disabled:opacity-75"
                         title="Navigate to Kitchen"
+                        aria-label="Navigate to kitchen"
                       >
                         {isNavigatingThis ? (
                           <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
@@ -850,6 +977,9 @@ export default function RiderDashboard() {
                               cycleNumber: order.cycle_number || 1
                             })}
                           </span>
+                          <span className="text-[9px] font-mono font-black bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md tracking-tight">
+                            #{order.id?.slice(-8)}
+                          </span>
                         </div>
                         <p className="text-xs text-slate-500 font-medium truncate mt-0.5">
                           {addressData?.line1 || cust?.address || 'Doorstep Address'}
@@ -863,6 +993,7 @@ export default function RiderDashboard() {
                           href={`tel:${phone}`}
                           className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center active:scale-95 transition-all shadow-xs"
                           title="Call Customer"
+                          aria-label="Call customer"
                         >
                           <Phone className="w-4 h-4" />
                         </a>
@@ -874,6 +1005,7 @@ export default function RiderDashboard() {
                           rel="noopener noreferrer"
                           className="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center active:scale-95 transition-all shadow-xs"
                           title="Navigate"
+                          aria-label="Navigate to customer"
                         >
                           <Navigation className="w-4 h-4" />
                         </a>
@@ -884,6 +1016,7 @@ export default function RiderDashboard() {
                           rel="noopener noreferrer"
                           className="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center active:scale-95 transition-all shadow-xs"
                           title="Navigate"
+                          aria-label="Navigate to customer"
                         >
                           <Navigation className="w-4 h-4" />
                         </a>
@@ -1048,6 +1181,10 @@ export default function RiderDashboard() {
                 <span className="text-xs font-black text-slate-900">
                   {completedDropsCount + 1} of {totalDropsCount} Deliveries
                 </span>
+              </div>
+
+              <div className="text-[10px] font-mono font-bold text-slate-400">
+                Order #{currentDropOrder.id}
               </div>
 
               <div>

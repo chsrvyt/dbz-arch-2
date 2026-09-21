@@ -4,6 +4,8 @@ import { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/store/authStore';
+import { isSubscriptionActive, isSubscriptionExpired } from '@dabzzo/shared-lib/subscriptionEntitlement';
+import { isLiveStatus, DELIVERED_STATUSES } from '@dabzzo/shared-lib/orderLifecycle';
 import { db } from '@/lib/firebase';
 import { isSuperadminEmail } from '@/lib/auth/auth-service';
 import {
@@ -108,8 +110,12 @@ function getOrderETA(order: any, riderTrip?: any, driverLocation?: {lat: number,
   return { type: 'scheduled', label: timeString };
 }
 
-const LIVE_STATUSES = ['picking_up', 'out_for_delivery', 'picked_up', 'preparing', 'vendor_ready', 'rider_assigned'];
-const DONE_STATUSES = ['delivered', 'failed'];
+/**
+ * Live/done status sets come from the shared order-lifecycle source of truth
+ * instead of a hand-rolled list. Formerly `created`/`ready`/`dispatched` etc.
+ * were missing here, so a real today-dated order showed "No Active Delivery".
+ */
+const DONE_STATUSES = [...(DELIVERED_STATUSES as string[]), 'failed'];
 
 function resolveDeliveredAt(order: any): Date | null {
   const ts = order?.deliveredAt || order?.delivered_at || order?.timestamps?.deliveredAt;
@@ -153,6 +159,7 @@ function CustomerTrackContent() {
   const [riderTrip, setRiderTrip] = useState<any>(null);
 
   const [activeSubs, setActiveSubs] = useState<any[]>([]);
+  const [expiredSubs, setExpiredSubs] = useState<any[]>([]);
 
   const [showUpdates, setShowUpdates] = useState(false);
 
@@ -309,11 +316,25 @@ function CustomerTrackContent() {
       unsubOrders = onSnapshot(qOrders, (snap) => {
         fromOrders = snap.docs.map(mapOrderDoc);
         mergeAndSortOrders();
-      }, (err) => console.warn("Track Orders listener error:", err.message));
+      }, (err) => {
+        console.warn("Track Orders listener error:", err.message);
+        // A failed listener permanently leaves `loading=true` (infinite spinner).
+        // Drop through to whatever data we have so the page still renders.
+        if (fromOrders.length > 0 || fromDeliveryOrders.length > 0) mergeAndSortOrders();
+        else setLoading(false);
+      });
 
       unsubSubs = onSnapshot(qSubs, (snap) => {
-        setActiveSubs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      }, (err) => console.warn("Track Subs listener error:", err.message));
+        // Entitlement-aware: a stored-'active' sub whose end date passed is
+        // EXPIRED — it must not enable live tracking or order actions.
+        const nowMs = Date.now();
+        const raw = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setExpiredSubs(raw.filter((s: any) => isSubscriptionExpired(s, nowMs)));
+        setActiveSubs(raw.filter((s: any) => isSubscriptionActive(s, nowMs)));
+      }, (err) => {
+        console.warn("Track Subs listener error:", err.message);
+        setLoading(false);
+      });
     }
 
     let unsubDirectOrder = () => {};
@@ -332,7 +353,10 @@ function CustomerTrackContent() {
           }
           setLoading(false);
         }
-      }, (err) => console.warn("Direct Order listener error:", err.message));
+      }, (err) => {
+        console.warn("Direct Order listener error:", err.message);
+        setLoading(false);
+      });
     }
 
     return () => {
@@ -343,7 +367,10 @@ function CustomerTrackContent() {
   }, [effectiveUserId, selectedOrderId, impersonatedCustomer?.name]);
 
   /* Derive current order */
-  const liveOrder = allOrders.find((o) => LIVE_STATUSES.includes(o.status)) ?? null;
+  const liveOrder = allOrders.find((o) => isLiveStatus(o.status)) ?? null;
+
+  // No active entitlement but an expired subscription exists → force RENEW state.
+  const needsRenewal = activeSubs.length === 0 && expiredSubs.length > 0;
 
   /* Subscribe to Rider location and trip if there is a live order and driverId */
   useEffect(() => {
@@ -601,6 +628,24 @@ function CustomerTrackContent() {
     );
   };
 
+  const renderRenewBanner = () => (
+    <Link
+      href="/profile"
+      className="flex items-center gap-3 mb-5 rounded-3xl bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-4 shadow-sm active:scale-[0.98] transition-all duration-200"
+    >
+      <div className="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">
+        <Crown className="w-5 h-5 text-white" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="font-black text-white text-[13px] leading-tight">Your subscription has expired</p>
+        <p className="text-white/80 text-[11px] font-semibold mt-0.5">
+          Renew to keep tracking meals &amp; new deliveries
+        </p>
+      </div>
+      <RotateCcw className="w-5 h-5 text-white/80 shrink-0" />
+    </Link>
+  );
+
   /* ── loading ── */
   if (loading) {
     return (
@@ -618,6 +663,7 @@ function CustomerTrackContent() {
     return (
       <div className="pt-8 pb-24 px-6 max-w-md mx-auto animate-fade-in">
         {isSuper && renderSuperadminBanner()}
+        {needsRenewal && renderRenewBanner()}
         <div className="bg-white rounded-[2rem] p-10 text-center border border-slate-100 shadow-sm flex flex-col items-center gap-4 mt-2">
           <div className="text-5xl">🍱</div>
           <div>
@@ -637,7 +683,7 @@ function CustomerTrackContent() {
     );
   }
 
-  const isLive = currentOrder && LIVE_STATUSES.includes(currentOrder.status);
+  const isLive = currentOrder && isLiveStatus(currentOrder.status);
   const isDelivered = currentOrder && DONE_STATUSES.includes(currentOrder.status) && currentOrder.status === 'delivered';
   const isFailed = currentOrder && currentOrder.status === 'failed';
 
@@ -655,6 +701,7 @@ function CustomerTrackContent() {
       {/* Header */}
       <div className="pt-6 pb-4 px-6 max-w-md mx-auto">
         {isSuper && renderSuperadminBanner()}
+        {needsRenewal && renderRenewBanner()}
 
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-brand bg-brand/10 px-3 py-1 rounded-full">

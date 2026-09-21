@@ -3,12 +3,12 @@
 import { useState, useMemo, useEffect } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
-import { 
-  Users, CheckCircle, ChefHat, PackageCheck, Phone, 
-  CalendarClock, IndianRupee, UtensilsCrossed, Sliders, 
-  Star, MapPin, Sparkles, Activity, ShieldCheck, Clock,
-  ArrowUpRight, AlertTriangle, RefreshCw, Tag, Check, Pencil,
-  Calendar, Truck, X
+import {
+  Users, CheckCircle, ChefHat, PackageCheck, Phone,
+  CalendarClock, IndianRupee, UtensilsCrossed,
+  Star, MapPin, Sparkles, Activity,
+  AlertTriangle, Tag, Check, Pencil,
+  Calendar, Truck, X, Loader2
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useVendorData } from '@/components/vendor/VendorDataProvider';
@@ -24,6 +24,7 @@ import { generateBoxTag } from '@/lib/boxTag';
 import { getBoxManifest } from '@/lib/mealManifest';
 import { VegIcon, NonVegIcon, DietaryBadge } from '@/components/shared/DietaryIcon';
 import { getErrorMessage } from '@dabzzo/shared-lib/errors';
+import { getVendorPrepSummary, getVendorPrepDetails } from '@dabzzo/shared-queries/delivery';
 
 type ActiveTab = 'overview' | 'tags' | 'menu' | 'subscribers' | 'rates';
 
@@ -288,6 +289,60 @@ export default function VendorDashboard() {
     }
   }, [subscriptions]);
 
+  // Real-order "Today's Preparation" — recomputed from the orders collection
+  // every 60s so it reflects live status changes (marks-ready, dispatches,
+  // cancellations, skips) without relying on batch totals.
+  const [prepSummary, setPrepSummary] = useState<{
+    total: number; needsPrep: number; lunch: number; dinner: number;
+    dispatched: number; delivered: number; cancelled: number;
+    byStatus: Record<string, number>;
+} | null>(null);
+
+  // Today's Orders drill-down (real order docs behind the prep counts).
+  const [prepOrders, setPrepOrders] = useState<any[] | null>(null);
+  const [prepModalOpen, setPrepModalOpen] = useState(false);
+  const [loadingPrepOrders, setLoadingPrepOrders] = useState(false);
+
+  const openPrepDrillDown = async () => {
+    const vendorId = vendorProfile?.id || user?.id;
+    if (!vendorId) return;
+    setLoadingPrepOrders(true);
+    setPrepModalOpen(true);
+    try {
+      const details = await getVendorPrepDetails(
+        vendorId,
+        new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+      );
+      setPrepOrders(details.rows);
+    } catch (err) {
+      console.warn('Prep drill-down failed:', err);
+      toast.error("Couldn't load today's orders");
+      setPrepOrders([]);
+    } finally {
+      setLoadingPrepOrders(false);
+    }
+  };
+
+  useEffect(() => {
+    const vendorId = vendorProfile?.id || user?.id;
+    if (!vendorId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const summary = await getVendorPrepSummary(
+          vendorId,
+          new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+        );
+        if (!cancelled) setPrepSummary(summary);
+      } catch (err) {
+        if (!cancelled) console.warn('Prep summary unavailable:', err);
+      }
+    };
+    load();
+    const interval = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [vendorProfile?.id, user?.id]);
+
   const TABS: { key: ActiveTab; label: string; icon: any }[] = [
     { key: 'overview', label: 'Operations & Dispatch', icon: Activity },
     { key: 'tags', label: '🏷️ Box Tags & Pack', icon: Tag },
@@ -463,38 +518,48 @@ export default function VendorDashboard() {
               </div>
             </div>
 
-            {/* 2. Today's Prep Volume */}
+            {/* 2. Today's Prep Volume — REAL count from order documents */}
             <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/80 shadow-[0_4px_20px_rgba(15,23,42,0.03)] flex flex-col justify-between">
               <div className="flex items-start justify-between gap-2 text-slate-400 text-[10px] sm:text-xs font-bold mb-2">
-                <span className="uppercase tracking-wide sm:tracking-wider leading-tight">Today's Prep</span>
+                <span className="uppercase tracking-wide sm:tracking-wider leading-tight">Today's Preparation</span>
                 <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
                   <ChefHat className="w-4 h-4" />
                 </div>
               </div>
               <div>
                 <div className="text-3xl font-black text-slate-900">
-                  {totalTodayTiffins > 0
-                    ? totalTodayTiffins
-                    : subscriptions.reduce((acc: number, sub: any) => {
-                        const effSlot = sub.delivery_slot || sub.deliverySlot || null;
-                        const hasBoth = !effSlot && sub.meal_type === 'both';
-                        return acc + (hasBoth ? 2 : 1);
-                      }, 0)
-                  } <span className="text-base font-bold text-slate-400">Tiffins</span>
+                  {prepSummary != null && prepSummary.total > 0
+                    ? prepSummary.needsPrep
+                    : (totalTodayTiffins > 0
+                      ? totalTodayTiffins
+                      : subscriptions.reduce((acc: number, sub: any) => {
+                          const effSlot = sub.delivery_slot || sub.deliverySlot || null;
+                          const hasBoth = !effSlot && sub.meal_type === 'both';
+                          return acc + (hasBoth ? 2 : 1);
+                        }, 0))
+                  }{' '}
+                  <span className="text-base font-bold text-slate-400">Tiffins</span>
                 </div>
                 <div className="text-[11px] font-semibold text-slate-500 mt-1">
-                  {(() => {
-                    const hasLunch = subscriptions.some((s: any) => {
-                      const effSlot = s.delivery_slot || s.deliverySlot || null;
-                      return effSlot === 'lunch' || (!effSlot && (s.meal_type === 'lunch' || s.meal_type === 'both' || !s.meal_type));
-                    });
-                    const hasDinner = subscriptions.some((s: any) => {
-                      const effSlot = s.delivery_slot || s.deliverySlot || null;
-                      return effSlot === 'dinner' || (!effSlot && (s.meal_type === 'dinner' || s.meal_type === 'both'));
-                    });
-                    return hasLunch && hasDinner ? 'Lunch & Dinner batches' : hasLunch ? 'Lunch batch only' : 'Dinner batch only';
-                  })()}
+                  {prepSummary != null && prepSummary.total > 0
+                    ? `Lunch ${prepSummary.lunch} · Dinner ${prepSummary.dinner} · ${prepSummary.dispatched} dispatched · ${prepSummary.delivered} delivered`
+                    : (() => {
+                        const hasLunch = subscriptions.some((s: any) => {
+                          const effSlot = s.delivery_slot || s.deliverySlot || null;
+                          return effSlot === 'lunch' || (!effSlot && (s.meal_type === 'lunch' || s.meal_type === 'both' || !s.meal_type));
+                        });
+                        const hasDinner = subscriptions.some((s: any) => {
+                          const effSlot = s.delivery_slot || s.deliverySlot || null;
+                          return effSlot === 'dinner' || (!effSlot && (s.meal_type === 'dinner' || s.meal_type === 'both'));
+                        });
+                        return hasLunch && hasDinner ? 'Lunch & Dinner batches' : hasLunch ? 'Lunch batch only' : 'Dinner batch only';
+                      })()}
                 </div>
+                {prepSummary != null && prepSummary.total > 0 && (
+                  <div className="text-[10px] font-bold text-slate-400 mt-1.5">
+                    Includes {prepSummary.cancelled} cancelled/skipped today
+                  </div>
+                )}
               </div>
             </div>
 
@@ -532,6 +597,50 @@ export default function VendorDashboard() {
             </div>
 
           </div>
+
+          {/* Real-order Preparation Breakdown by status */}
+          {prepSummary != null && prepSummary.total > 0 && (
+            <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/80 shadow-[0_4px_20px_rgba(15,23,42,0.03)]">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <ChefHat className="w-4 h-4 text-brand" />
+                  Today's Preparation — Live Order Breakdown
+                </h3>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    From {prepSummary.total} real orders
+                  </span>
+                  <button
+                    type="button"
+                    onClick={openPrepDrillDown}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-wider shadow-sm hover:bg-slate-800 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <PackageCheck className="w-3.5 h-3.5" />
+                    View Orders
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(prepSummary.byStatus).sort(([a], [b]) => a.localeCompare(b)).map(([status, count]) => (
+                  <div
+                    key={status}
+                    className="flex items-center gap-1.5 rounded-xl bg-slate-50 border border-slate-200/80 px-3 py-1.5"
+                  >
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">{status.replace(/_/g, ' ')}</span>
+                    <span className="text-sm font-black text-slate-900">{count}</span>
+                  </div>
+                ))}
+              </div>
+              {prepSummary.cancelled > 0 && (
+                <div className="mt-3 flex items-center gap-2 rounded-xl bg-red-50 border border-red-100 px-3 py-2">
+                  <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+                  <p className="text-[11px] font-bold text-red-700">
+                    {prepSummary.cancelled} cancelled/skipped tiffin{prepSummary.cancelled > 1 ? 's' : ''} today — {prepSummary.needsPrep} still need preparation.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Main 2-Column Dispatch Center */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1545,6 +1654,88 @@ export default function VendorDashboard() {
           </div>
         );
       })()}
+
+      {/* Today's Orders drill-down modal */}
+      {prepModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-6" role="dialog" aria-modal="true" aria-label="Today's orders">
+          <div className="bg-white w-full sm:max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[85vh] flex flex-col overflow-hidden animate-fade-in">
+            <div className="flex items-center justify-between p-5 border-b border-slate-100 shrink-0">
+              <div>
+                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <PackageCheck className="w-4 h-4 text-brand" />
+                  Today's Orders
+                </h3>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">
+                  {prepOrders ? `${prepOrders.length} tiffin${prepOrders.length === 1 ? '' : 's'}` : 'Loading…'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPrepModalOpen(false)}
+                aria-label="Close orders"
+                className="w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center active:scale-95 transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto p-4 space-y-2.5">
+              {loadingPrepOrders && (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-center">
+                  <Loader2 className="w-6 h-6 text-brand animate-spin" />
+                  <p className="text-xs font-bold text-slate-400">Fetching today's orders…</p>
+                </div>
+              )}
+
+              {!loadingPrepOrders && prepOrders && prepOrders.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 gap-2 text-center">
+                  <PackageCheck className="w-8 h-8 text-slate-300" />
+                  <p className="text-xs font-bold text-slate-400">No orders found for today.</p>
+                </div>
+              )}
+
+              {!loadingPrepOrders && prepOrders && prepOrders.map((row: any) => {
+                const attention = ['cancelled', 'failed', 'skipped', 'swapped_out'].includes(row.status);
+                return (
+                  <div key={row.id} className="rounded-2xl border border-slate-200/80 p-3.5 flex items-start gap-3">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-[10px] font-black shrink-0 ${attention ? 'bg-red-50 text-red-600' : 'bg-slate-900 text-white'}`}>
+                      #{String(row.id).slice(-5)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="font-black text-[13px] text-slate-900 leading-tight truncate">
+                          {row.customerName || 'Walk-in / Unknown'}
+                        </p>
+                        <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full ${attention ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>
+                          {row.status.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                        {row.mealType ? `${String(row.mealType).replace(/_/g, ' ')} · ` : ''}
+                        {row.addressLine || 'Doorstep'}
+                      </p>
+                      <p className="text-[10px] font-mono text-slate-400 truncate mt-0.5">
+                        #{row.id}{row.riderName ? ` · Rider: ${row.riderName}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {row.customerPhone && (
+                        <a
+                          href={`tel:${row.customerPhone}`}
+                          aria-label={`Call ${row.customerName || 'customer'}`}
+                          className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center active:scale-95 transition-all"
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Custom Confirmation Dialog */}
       <ConfirmDialog

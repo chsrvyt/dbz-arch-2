@@ -9,6 +9,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useVendorStore } from '@/store/vendorStore';
 import { useUiStore } from '@/store/uiStore';
 import { getApprovedVendors } from '@/lib/queries/users';
+import { getCustomerAccessState } from '@dabzzo/shared-lib/subscriptionEntitlement';
 import { getDocs, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { VendorCard } from '@/components/vendor/VendorCard';
@@ -84,6 +85,9 @@ export default function UserDashboard() {
   /* Live Database States */
   const [activeSubs, setActiveSubs] = useState<any[]>([]);
   const [activeDelivery, setActiveDelivery] = useState<any>(null);
+  // Realtime mirror of the entitlement-filtered subscription list so the orders
+  // listener can gate the live-delivery card without a stale closure.
+  const activeSubsRef = useRef<any[]>([]);
 
   // Defer Firestore real-time subscriptions off critical rendering path
   useEffect(() => {
@@ -94,14 +98,20 @@ export default function UserDashboard() {
     const unsubDeliveries = () => {};
 
     const timer = setTimeout(() => {
-      // Listen to active subscriptions
+      // Listen to active subscriptions (entitlement-aware: expired-but-stored-
+      // active subs are treated as EXPIRED and must not grant UI benefits).
       const qSubs = query(
         collection(db, 'subscriptions'),
         where('user_id', '==', user.id),
         where('status', '==', 'active')
       );
       unsubSubs = onSnapshot(qSubs, (snap) => {
-        setActiveSubs(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+        const access = getCustomerAccessState(
+          snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+        );
+        const validSubs = access.activeSubscriptions;
+        activeSubsRef.current = validSubs;
+        setActiveSubs(validSubs);
       });
 
       // Listen to today's active delivery order
@@ -109,6 +119,13 @@ export default function UserDashboard() {
       let ordersList: any[] = [];
 
       const updateActiveDelivery = () => {
+        // A live delivery benefits only an ACTIVE subscription. If the sub has
+        // expired (or none exists), the stored status may still say 'active' —
+        // the entitlement check below guarantees the card never shows.
+        if (activeSubsRef.current.length === 0) {
+          setActiveDelivery(null);
+          return;
+        }
         const allActive = [...ordersList];
         if (allActive.length > 0) {
           const priorityOrder: Record<string, number> = {
@@ -135,7 +152,12 @@ export default function UserDashboard() {
       unsubOrders = onSnapshot(
         qOrders,
         (snap) => {
-          ordersList = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+          // device-local date string is fine here: todayStr is only used to
+          // decide which in-flight orders are "now", never any server decision
+          const todayStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+          ordersList = snap.docs
+            .map((doc) => ({ id: doc.id, ...doc.data() }))
+            .filter((order) => (order as any).date === todayStr);
           updateActiveDelivery();
         },
         (err) => console.warn('Dashboard orders listener warning:', err.message)

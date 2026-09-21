@@ -30,6 +30,8 @@ import {
 import { db } from '@dabzzo/shared-auth';
 import type { Subscription, EnrichedSubscription, MealType, SubscriptionFrequency, DietaryCategory, SelectedAddon, CustomMealConfig } from '@dabzzo/shared-types';
 import { calculateStandardSubscriptionProduct } from '@dabzzo/shared-lib/pricingEngine';
+import { isSubscriptionActive, getCustomerAccessState } from '@dabzzo/shared-lib/subscriptionEntitlement';
+import type { CustomerAccessState } from '@dabzzo/shared-lib/subscriptionEntitlement';
 
 // ─── Deterministic document ID ────────────────────────────────────────────────
 // One document per (user × vendor × mealType). Always the same ID, always.
@@ -67,6 +69,27 @@ export async function getUserSubscriptions(userId: string): Promise<Subscription
   return subs;
 }
 
+// ─── Active subscriptions (entitlement-aware) ─────────────────────────────────
+// The single canonical read for "what does this customer currently have access
+// to". Filters the stored status correctly: a sub whose `next_billing_date` has
+// passed is EXPIRED even if its stored status is still 'active'. Used by every
+// customer-facing panel so an expired subscription can never present as active.
+// Uses the same TTL cache as getUserSubscriptions.
+export async function getActiveSubscriptionsFor(userId: string): Promise<Subscription[]> {
+  const all = await getUserSubscriptions(userId);
+  const nowMs = Date.now();
+  return all.filter((s) => isSubscriptionActive(s as Record<string, any>, nowMs));
+}
+
+// ─── Entitlement summary for a customer ───────────────────────────────────────
+export async function getCustomerEntitlement(
+  userId: string,
+  nowMs: number = Date.now()
+): Promise<CustomerAccessState> {
+  const all = await getUserSubscriptions(userId);
+  return getCustomerAccessState(all as Record<string, any>[], nowMs);
+}
+
 // ─── Get Vendor Subscriptions ─────────────────────────────────────────────────
 export async function getVendorSubscriptions(vendorId: string): Promise<Subscription[]> {
   const q = query(
@@ -75,7 +98,12 @@ export async function getVendorSubscriptions(vendorId: string): Promise<Subscrip
     where('status', '==', 'active')
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Subscription));
+  const nowMs = Date.now();
+  const subs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Subscription));
+  // Entitlement-aware: an expired-but-still-'active' sub must not inflate a
+  // vendor's active-subscriber/prep counts (the server sweep flips these docs
+  // to cancelled; this is defense-in-depth for the window before the sweep).
+  return subs.filter((s) => isSubscriptionActive(s as Record<string, any>, nowMs));
 }
 
 // ─── Bulk-update Subscription Prices ──────────────────────────────────────────

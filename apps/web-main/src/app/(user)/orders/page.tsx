@@ -16,10 +16,12 @@ import { SwapVendorModal } from '@/components/shared/SwapVendorModal';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { Box, History, CreditCard, Utensils, Calendar, ChevronRight, Navigation, ArrowLeftRight, SkipForward, Clock, XCircle, Sun, Moon } from 'lucide-react';
+import { Box, History, CreditCard, Utensils, Calendar, ChevronRight, Navigation, ArrowLeftRight, SkipForward, Clock, XCircle, Sun, Moon, RefreshCw } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { generateBoxTag } from '@/lib/boxTag';
 import { getErrorMessage } from '@dabzzo/shared-lib/errors';
+import { isSubscriptionActive, isSubscriptionExpired } from '@dabzzo/shared-lib/subscriptionEntitlement';
+import { LIVE_TRACKING_STATUSES, ACTIVE_ORDER_STATUSES } from '@dabzzo/shared-lib/orderLifecycle';
 
 const DeliveryMap = dynamic(() => import('@/components/delivery/DeliveryMap'), { 
   ssr: false,
@@ -140,6 +142,7 @@ export default function OrdersPage() {
   const [vendorsList, setVendorsList] = useState<any[]>([]);
   const [realOrders, setRealOrders] = useState<any[]>([]);
   const [activeSubs, setActiveSubs] = useState<any[]>([]);
+  const [expiredSubs, setExpiredSubs] = useState<any[]>([]);
   const [activeDelivery, setActiveDelivery] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'active' | 'history'>('active');
@@ -264,8 +267,11 @@ export default function OrdersPage() {
         const unsubSubs = onSnapshot(qSubs, async (snap) => {
           if (!mounted) return;
           const allUserSubs = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
-          const activeOnly = allUserSubs.filter(s => s.status === 'active');
-          setActiveSubs(activeOnly);
+          // Entitlement-aware: expired-but-stored-active subs must not show as
+          // active (they surface under the RENEW state instead).
+          const nowMs = Date.now();
+          setActiveSubs(allUserSubs.filter((s) => isSubscriptionActive(s, nowMs)));
+          setExpiredSubs(allUserSubs.filter((s) => isSubscriptionExpired(s, nowMs)));
 
           // Real-time enrich orders
           try {
@@ -312,11 +318,11 @@ export default function OrdersPage() {
         unsubscribers.push(unsubSubs);
 
         // Test orders listener
-        const LIVE_STATUSES = ['picking_up', 'out_for_delivery', 'picked_up', 'preparing', 'vendor_ready', 'rider_assigned'];
+        const LIVE_STATUSES = LIVE_TRACKING_STATUSES;
         const qTestOrders = query(
           collection(db, 'orders'),
           where('user_id', '==', user.id),
-          where('status', 'in', LIVE_STATUSES)
+          where('status', 'in', [...LIVE_STATUSES])
         );
         const unsubTestOrders = onSnapshot(qTestOrders, (snap) => {
           if (!mounted) return;
@@ -681,13 +687,20 @@ export default function OrdersPage() {
 
   const hasRecurring = activeSubs.some((s: any) => s.frequency !== 'one-time');
 
+  // Entitlement gate: live tracking is a benefit of an active subscription.
+  const trackEligible = activeSubs.length > 0;
+  const displayDelivery = trackEligible ? activeDelivery : null;
+  const displayTestOrder = trackEligible ? activeTestOrder : null;
+  const needsRenewal = !trackEligible && expiredSubs.length > 0;
+
   // Determine if there's a real order today to show the track button
   // Include 'created' and 'pending' so single-meal orders show Track banner immediately
   const todayStr = new Date().toLocaleDateString('en-CA');
-  const hasTodayOrder = !!activeTestOrder || realOrders.some(o => {
+  const hasTodayOrder = !!displayTestOrder || realOrders.some(o => {
     const { dateStr } = parseDeliveryDate(o);
-    return dateStr === todayStr && ['created', 'pending', 'preparing', 'vendor_ready', 'ready', 'picked_up', 'out_for_delivery', 'delivered'].includes(o.status);
+    return dateStr === todayStr && (ACTIVE_ORDER_STATUSES as readonly string[]).includes(o.status);
   });
+  const hasTrackableToday = trackEligible && hasTodayOrder;
 
   return (
     <div className="animate-fade-in pb-20 px-4 sm:px-5">
@@ -701,27 +714,28 @@ export default function OrdersPage() {
         </p>
       </div>
 
-      {/* Track Today's Order Banner — shows when today has an active/scheduled order */}
-      {(activeDelivery || activeTestOrder || hasTodayOrder) && (
+      {/* Track Banner — green when a live/today delivery exists for an active sub;
+          amber RENEW state when a subscription expired and no benefit remains */}
+      {(displayDelivery || displayTestOrder || hasTrackableToday) && (
         <Link href="/track" className="block mb-6 animate-fade-in">
           <div className={`relative overflow-hidden rounded-3xl px-5 py-4 flex items-center gap-4 shadow-sm transition-all duration-200 active:scale-[0.98] ${
-            (activeDelivery || activeTestOrder)
+            (displayDelivery || displayTestOrder)
               ? 'bg-gradient-to-r from-emerald-500 to-teal-500'
               : 'bg-gradient-to-r from-brand to-indigo-500'
           }`}>
             {/* Subtle shine overlay */}
             <div className="absolute inset-0 bg-white/5 rounded-3xl pointer-events-none" />
             <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
-              (activeDelivery || activeTestOrder) ? 'bg-white/20' : 'bg-white/20'
+              (displayDelivery || displayTestOrder) ? 'bg-white/20' : 'bg-white/20'
             }`}>
-              {(activeDelivery || activeTestOrder)
+              {(displayDelivery || displayTestOrder)
                 ? <Navigation className="w-5 h-5 text-white animate-pulse" />
                 : <Navigation className="w-5 h-5 text-white" />
               }
             </div>
             <div className="flex-1 min-w-0">
               <p className="font-black text-white text-[14px] leading-tight">
-                {(activeDelivery || activeTestOrder) ? '🚴 Your food is on the way!' : '📦 Track Today\'s Order'}
+                {(displayDelivery || displayTestOrder) ? '🚴 Your food is on the way!' : '📦 Track Today\'s Order'}
               </p>
               <p className="text-white/80 text-[11px] font-semibold mt-0.5">
                 {activeDelivery ? `Partner: ${activeDelivery.partnerName}` : 'Tap to see live delivery status'}
@@ -732,8 +746,27 @@ export default function OrdersPage() {
         </Link>
       )}
 
+      {/* RENEW banner — subscription expired, no active benefits remain */}
+      {needsRenewal && (
+        <Link href="/track" className="block mb-6 animate-fade-in">
+          <div className="relative overflow-hidden rounded-3xl px-5 py-4 flex items-center gap-4 bg-gradient-to-r from-amber-500 to-orange-500 shadow-sm transition-all duration-200 active:scale-[0.98]">
+            <div className="absolute inset-0 bg-white/5 rounded-3xl pointer-events-none" />
+            <div className="w-11 h-11 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">
+              <RefreshCw className="w-5 h-5 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-black text-white text-[14px] leading-tight">⚠️ Your subscription has expired</p>
+              <p className="text-white/80 text-[11px] font-semibold mt-0.5">
+                Renew to keep tracking meals & new deliveries
+              </p>
+            </div>
+            <ChevronRight className="w-5 h-5 text-white/70 shrink-0" />
+          </div>
+        </Link>
+      )}
+
       {/* Active Delivery Tracking Map (inline, only shows when driver is live) */}
-      {activeDelivery && (
+      {displayDelivery && (
         <div className="mb-10">
           <h3 className="font-bold text-slate-900 mb-3 px-1">Live Tracking</h3>
           <div className="bg-white rounded-3xl p-5 md:p-8 shadow-sm border border-slate-100">

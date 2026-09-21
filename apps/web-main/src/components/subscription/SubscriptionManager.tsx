@@ -32,6 +32,7 @@ import {
   getUserSubscriptions,
 } from '@/lib/queries/subscriptions';
 import { formatDate, cn } from '@/lib/utils';
+import { isSubscriptionExpired } from '@dabzzo/shared-lib/subscriptionEntitlement';
 import type { Subscription } from '@/types';
 
 export interface SubscriptionManagerProps {
@@ -357,7 +358,7 @@ export function SubscriptionManager({
           const totalPrice =
             sub.customPlan?.totalPrice || sub.total_price || sub.price || 0;
 
-          const isActive = sub.status === 'active';
+          const isActive = sub.status === 'active' && !isSubscriptionExpired(sub as any);
           const isPaused = sub.status === 'paused';
 
           const patternSummary = formatPatternSummary(

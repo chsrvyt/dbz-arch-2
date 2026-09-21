@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { statusToLifecycleStage } from '@dabzzo/shared-lib/orderLifecycle';
 
 // ── Map icons ─────────────────────────────────────────────────────────────────
 function createSvgIcon(svgHtml: string, size: [number, number], anchor: [number, number]) {
@@ -48,9 +49,10 @@ function PulseRing({ color = '#ff6b00' }: { color?: string }) {
 
 // ── Status config ─────────────────────────────────────────────────────────────
 export type TrackingStatus =
-  | 'preparing' | 'rider_assigned' | 'vendor_ready'
-  | 'picked_up' | 'out_for_delivery' | 'delivered'
-  | 'failed_attempt' | 'cancelled';
+  | 'created' | 'pending' | 'vendor_notified' | 'vendor_preparing' | 'cooking' | 'preparing'
+  | 'vendor_ready' | 'ready' | 'dispatched'
+  | 'rider_assigned' | 'rider_en_route_pickup' | 'picking_up' | 'picked_up' | 'out_for_delivery'
+  | 'delivered' | 'completed' | 'failed_attempt' | 'failed' | 'cancelled';
 
 interface Step { key: TrackingStatus; label: string; emoji: string; desc: string; color: string }
 const STEPS: Step[] = [
@@ -62,30 +64,30 @@ const STEPS: Step[] = [
 ];
 
 function getStepIndex(status: TrackingStatus): number {
-  switch (status) {
-    case 'preparing':
-      return 0;
-    case 'vendor_ready':
-    case 'rider_assigned':
-      return 1;
-    case 'picked_up':
-      return 2;
-    case 'out_for_delivery':
-      return 3;
-    case 'delivered':
-      return 4;
-    default:
-      return 0;
-  }
+  // Single mapping from the shared lifecycle model so every canonical status
+  // renders a meaningful checkpoint (previously anything outside the 6-status
+  // switch fell back to step 0 with a raw status pill).
+  const stage = statusToLifecycleStage(status);
+  return stage ? stage.index : 0;
 }
 
 const STATUS_MESSAGES: Partial<Record<TrackingStatus, string[]>> = {
+  created:          ['Your order is confirmed 🎉', "We're getting the kitchen ready"],
+  pending:          ['Order placed — stay tuned 🍱', 'Preparing schedule for today'],
+  vendor_notified:  ['Kitchen has been notified 🍳', 'Cooking will start soon'],
+  vendor_preparing: ['Your tiffin is being packed fresh 🍱', 'Almost ready for pickup!'],
   preparing:        ['Your tiffin is being packed fresh 🍱', 'Almost ready for pickup!'],
+  cooking:          ['Cooking in progress 🍲', 'Fresh tiffin underway'],
   vendor_ready:     ['Tiffin packed! Waiting for rider 🛵', 'Rider will pick up soon'],
+  ready:            ['Tiffin packed! Ready for dispatch 🛵', 'Waiting for rider assignment'],
+  dispatched:       ['Boxed and handed to rider 🚚', 'On its way to you'],
   rider_assigned:   ['Rider is heading to the kitchen 🏃', 'Your order is being assigned'],
+  rider_en_route_pickup: ['Rider en route to the kitchen 🏃', 'Pickup is happening now'],
+  picking_up:       ['Rider is collecting your order 📦', 'Pickup in progress'],
   picked_up:        ['Rider has your order! 🎉', 'Fresh & warm, on the way to you'],
   out_for_delivery: ['Your rider is en route 🛵💨', 'GPS map is now live!'],
   delivered:        ['Delivered! Enjoy your meal 🎉', 'Rate your experience below'],
+  completed:        ['Delivered! Enjoy your meal 🎉', 'Rate your experience below'],
 };
 
 // ── Live countdown hook ───────────────────────────────────────────────────────

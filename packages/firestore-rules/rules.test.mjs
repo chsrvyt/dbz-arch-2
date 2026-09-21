@@ -25,7 +25,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 const CUSTOMER = 'user_customer';
 const VENDOR = 'user_vendor';
+const RIDER = 'user_rider';
 const ADMIN = 'user_admin';
+
+// Realistic custom-claims tokens. authenticatedContext without extra claims
+// leaves request.auth.token empty, which makes the rules engine log noisy
+// "Property X is undefined" diagnostics while evaluating isAdmin()'s claim
+// lookups (role/email/admin) and some list branches.
+const ADMIN_CLAIMS = { admin: true, role: 'admin', email: 'admin@dabzzo.in' };
+function customerClaims() { return { role: 'customer', email: 'cust@dabzzo.in', admin: false }; }
+function vendorClaims() { return { role: 'vendor', email: 'vendor@dabzzo.in', admin: false }; }
+function riderClaims() { return { role: 'delivery', email: 'rider@dabzzo.in', admin: false }; }
 
 let testEnv;
 const results = [];
@@ -322,6 +332,169 @@ async function main() {
     await assertFails(
       setDoc(doc(db, 'users', VENDOR), { phone_prompt_shown: true }, { merge: true })
     );
+  });
+
+  // ── Referral system ─────────────────────────────────────────────────────
+  const CODE = 'REF10-ABCDEF';
+  const REFERRAL_ID = `ref_${CODE}_${CUSTOMER}`;
+
+  await it('an authenticated user can read their own referral record', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'referral_codes', CODE), { user_id: VENDOR, created_at: serverTimestamp() });
+      await setDoc(doc(db, 'referrals', REFERRAL_ID), {
+        code: CODE, referred_user_id: CUSTOMER, status: 'pending', referred_phone: '+919119000000',
+      });
+    });
+    const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+    await assertSucceeds(getDoc(doc(db, 'referrals', REFERRAL_ID)));
+    await assertSucceeds(getDoc(doc(db, 'referral_codes', CODE)));
+  });
+
+  await it('a user CANNOT read someone else\'s referral record', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'referrals', REFERRAL_ID), {
+        code: CODE, referred_user_id: VENDOR, status: 'pending', referred_phone: '+919119000000',
+      });
+    });
+    const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+    await assertFails(getDoc(doc(db, 'referrals', REFERRAL_ID)));
+  });
+
+  await it('a user CANNOT write a referral doc (server-only collection)', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users', CUSTOMER), { role: 'user' });
+      await setDoc(doc(db, 'users', VENDOR), { role: 'user' });
+    });
+    const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+    await assertFails(
+      setDoc(doc(db, 'referrals', REFERRAL_ID), {
+        code: CODE, referred_user_id: CUSTOMER, status: 'pending', referred_phone: '+919119000000',
+      })
+    );
+    await assertFails(setDoc(doc(db, 'referral_codes', CODE), { user_id: CUSTOMER }));
+    await assertFails(setDoc(doc(db, 'referral_milestone_claims', `${CUSTOMER}_m3`), { status: 'claim' }));
+  });
+
+  await it('a user can read their own milestone claims (locked status disclosed)', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'referral_milestone_claims', `${CUSTOMER}_m3`), {
+        user_id: CUSTOMER, milestone: 'm3', status: 'available', code: CODE,
+      });
+      await setDoc(doc(db, 'referral_milestone_claims', `${VENDOR}_m7`), {
+        user_id: VENDOR, milestone: 'm7', status: 'available', code: CODE,
+      });
+    });
+    const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+    await assertSucceeds(getDoc(doc(db, 'referral_milestone_claims', `${CUSTOMER}_m3`)));
+    await assertSucceeds(getDoc(doc(db, 'referral_milestone_claims', `${CUSTOMER}_m5`))); // locked: doc absent
+    await assertFails(getDoc(doc(db, 'referral_milestone_claims', `${VENDOR}_m7`)));
+  });
+
+  // ── Cross-tenant read scoping (orders / deliveries / subscriptions) ──────
+  // Rule tightening: list/get on these collections are participant-only, so a
+  // rider/vendor CANNOT enumerate every customer's orders, addresses and OTPs
+  // and any authenticated user CANNOT list every subscription in the system.
+  await it('an order-owning customer can get their own order', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'orders', 'o_me'), {
+        user_id: CUSTOMER, vendor_id: VENDOR, status: 'created',
+      });
+    });
+    const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+    await assertSucceeds(getDoc(doc(db, 'orders', 'o_me')));
+  });
+
+  await it('a customer CANNOT get another customer\'s order (IDOR)', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users', CUSTOMER), { role: 'customer' });
+      await setDoc(doc(db, 'orders', 'o_theirs'), {
+        user_id: VENDOR, vendor_id: VENDOR, status: 'created',
+      });
+    });
+    const db = testEnv.authenticatedContext(CUSTOMER).firestore();
+    await assertFails(getDoc(doc(db, 'orders', 'o_theirs')));
+  });
+
+  await it('rider may only get orders assigned to them (not the whole collection)', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users', RIDER), { role: 'delivery', is_approved: true });
+      await setDoc(doc(db, 'orders', 'o_mine'), {
+        user_id: CUSTOMER, vendor_id: VENDOR, rider_id: RIDER, status: 'dispatched',
+      });
+      await setDoc(doc(db, 'orders', 'o_other'), {
+        user_id: CUSTOMER, vendor_id: VENDOR, rider_id: 'user_rider_2', status: 'dispatched',
+      });
+    });
+    const db = testEnv.authenticatedContext(RIDER, riderClaims()).firestore();
+    await assertSucceeds(getDoc(doc(db, 'orders', 'o_mine')));
+    await assertFails(getDoc(doc(db, 'orders', 'o_other')));
+  });
+
+  await it('unscoped orders list is denied for a rider (no cross-tenant scan)', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users', RIDER), { role: 'delivery', is_approved: true });
+      await setDoc(doc(db, 'orders', 'o_mine'), {
+        user_id: CUSTOMER, vendor_id: VENDOR, rider_id: RIDER, status: 'dispatched',
+      });
+    });
+    const db = testEnv.authenticatedContext(RIDER, riderClaims()).firestore();
+    // A rider querying rider_id == self must see their own orders...
+    await assertSucceeds(getDocs(query(collection(db, 'orders'), where('rider_id', '==', RIDER))));
+    // ...but the app must scope by rider_id; a bare scan is denied.
+    await assertFails(getDocs(collection(db, 'orders')));
+  });
+
+  await it('a participant rider may list only deliveries they are on', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users', RIDER), { role: 'delivery', is_approved: true });
+      await setDoc(doc(db, 'deliveries', 'd_mine'), { agentId: RIDER, riderId: RIDER, status: 'active' });
+      await setDoc(doc(db, 'deliveries', 'd_other'), { agentId: 'user_rider_2', riderId: 'user_rider_2', status: 'active' });
+    });
+    const db = testEnv.authenticatedContext(RIDER, riderClaims()).firestore();
+    // The rider app scopes by riderId (see rider-panel lib/delivery/locationTracker).
+    await assertSucceeds(getDocs(query(collection(db, 'deliveries'), where('riderId', '==', RIDER))));
+    // A bare scan is denied: it would return deliveries not part of this rider.
+    await assertFails(getDocs(collection(db, 'deliveries')));
+  });
+
+  await it('a customer may list their own deliveries only', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users', CUSTOMER), { role: 'customer' });
+      await setDoc(doc(db, 'users', VENDOR), { role: 'customer' });
+      await setDoc(doc(db, 'deliveries', 'd_mine'), { customerId: CUSTOMER, vendorId: VENDOR });
+      await setDoc(doc(db, 'deliveries', 'd_other'), { customerId: VENDOR, vendorId: VENDOR });
+    });
+    const db = testEnv.authenticatedContext(CUSTOMER, customerClaims()).firestore();
+    await assertFails(getDocs(collection(db, 'deliveries')));
+    await assertSucceeds(
+      getDocs(query(collection(db, 'deliveries'), where('customerId', '==', CUSTOMER)))
+    );
+    await assertFails(getDoc(doc(db, 'deliveries', 'd_other')));
+  });
+
+await it('a vendor may not list subscriptions belonging to other customers', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users', VENDOR), { role: 'vendor' });
+      await setDoc(doc(db, 'users', 'user_other_customer'), { role: 'customer' });
+      await setDoc(doc(db, 'subscriptions', 'mine'), { user_id: CUSTOMER, vendor_id: VENDOR, status: 'active' });
+      await setDoc(doc(db, 'subscriptions', 'theirs'), { user_id: 'user_other_customer', vendor_id: 'v_other', status: 'active' });
+    });
+    const db = testEnv.authenticatedContext(VENDOR, vendorClaims()).firestore();
+    const own = await getDocs(query(collection(db, 'subscriptions'), where('vendor_id', '==', VENDOR)));
+    assert.strictEqual(own.size, 1, 'vendor lists only their own subscriptions');
+    await assertFails(getDocs(collection(db, 'subscriptions')));
+    await assertFails(getDoc(doc(db, 'subscriptions', 'theirs')));
   });
 
   await testEnv.cleanup();

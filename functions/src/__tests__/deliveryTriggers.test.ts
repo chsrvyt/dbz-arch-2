@@ -197,6 +197,33 @@ describe('Delivery Status Updates and Payouts', () => {
     ).rejects.toThrow('Must provide a non-empty reason');
   });
 
+  it('9. Rejects canonical-but-non-delivery statuses (e.g. cancelled) via target whitelist', async () => {
+    await expect(
+      wrappedUpdateDeliveryStatus({
+        data: { orderId: 'order_1', status: 'cancelled' },
+        auth: { uid: 'agent_123', token: { role: 'delivery_agent' } },
+      })
+    ).rejects.toThrow('Cannot set delivery status to "cancelled"');
+  });
+
+  it('10. Rejects arbitrary status injection (e.g. rider_assigned) via target whitelist', async () => {
+    await expect(
+      wrappedUpdateDeliveryStatus({
+        data: { orderId: 'order_1', status: 'rider_assigned' },
+        auth: { uid: 'agent_123', token: { role: 'delivery_agent' } },
+      })
+    ).rejects.toThrow('Cannot set delivery status to "rider_assigned"');
+  });
+
+  it('11. Future/backdated canonical statuses are still rejected (delivered → ready regressions)', async () => {
+    await expect(
+      wrappedUpdateDeliveryStatus({
+        data: { orderId: 'order_1', status: 'ready' },
+        auth: { uid: 'agent_123', token: { role: 'delivery_agent' } },
+      })
+    ).rejects.toThrow('Cannot set delivery status to "ready"');
+  });
+
   it('5. Successful delivered transition creates an agent_payout document', async () => {
     // This tests the payoutTrigger (onDeliveryCompletedPayout) which runs after the delivery status is updated to delivered.
     

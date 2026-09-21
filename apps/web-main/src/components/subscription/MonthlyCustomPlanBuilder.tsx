@@ -25,6 +25,7 @@ import { getPricingConfig, DEFAULT_MONTHLY_PRICING } from '@/lib/queries/pricing
 import { calculateCustomPlanPrice } from '@/lib/pricing';
 import { calculateSubscriptionPrice, DEFAULT_STANDARD_MEAL } from '@/lib/pricingEngine';
 import { getUserSubscriptions } from '@/lib/queries/subscriptions';
+import { isSubscriptionActive } from '@dabzzo/shared-lib/subscriptionEntitlement';
 import { CustomPlanCheckoutModal } from './CustomPlanCheckoutModal';
 import { ThaliCustomizer, ThaliCustomizerConfig } from './ThaliCustomizer';
 import { useAuthStore } from '@/store/authStore';
@@ -349,8 +350,9 @@ export function MonthlyCustomPlanBuilder({
 
       try {
         const subs: Subscription[] = await getUserSubscriptions(user.id);
+        const nowMs = Date.now();
         const activeMonthly = subs.find(
-          (s) => s.status === 'active' && s.frequency === 'monthly'
+          (s) => s.status === 'active' && s.frequency === 'monthly' && isSubscriptionActive(s as any, nowMs)
         );
 
         if (!activeMonthly || !isMounted) return;
