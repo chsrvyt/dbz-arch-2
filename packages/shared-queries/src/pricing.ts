@@ -242,6 +242,12 @@ import {
   DEFAULT_ITEM_CATALOG,
   DEFAULT_STANDARD_MEAL,
   ItemDefinition,
+  MarginRule,
+  MarginRulesConfig,
+  normalizeMarginRule,
+  validateMarginRuleSet,
+  resolveMarginRateForMeals,
+  applyMarginRulesToRules,
 } from '@dabzzo/shared-lib/pricingEngine';
 
 export {
@@ -253,7 +259,71 @@ export {
   DEFAULT_ITEM_CATALOG,
   DEFAULT_STANDARD_MEAL,
   type ItemDefinition,
+  type MarginRule,
+  type MarginRulesConfig,
+  normalizeMarginRule,
+  validateMarginRuleSet,
+  resolveMarginRateForMeals,
+  applyMarginRulesToRules,
 };
+
+export const MARGIN_RULES_DOC = {
+  collection: 'system_settings',
+  docId: 'margin_rules',
+};
+
+/**
+ * Fetch the dynamic margin-rule configuration from `system_settings/margin_rules`.
+ * Returns a safe default (enabled, no rules) when the document does not exist.
+ */
+export async function getMarginRules(): Promise<MarginRulesConfig> {
+  try {
+    const docRef = doc(db, MARGIN_RULES_DOC.collection, MARGIN_RULES_DOC.docId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      const rawRules = Array.isArray(data.rules) ? data.rules : [];
+      const rules: MarginRule[] = [];
+      rawRules.forEach((raw: any) => {
+        const rule = normalizeMarginRule(raw);
+        if (rule) rules.push(rule);
+      });
+      return {
+        enabled: data.enabled !== false,
+        rules,
+        version: typeof data.version === 'string' ? data.version : '1.0.0',
+        updatedAt: data.updatedAt,
+        updatedBy: data.updatedBy,
+      };
+    }
+  } catch (err) {
+    console.warn('[getMarginRules] Failed to fetch margin rules, using none:', err);
+  }
+  return { enabled: true, rules: [] };
+}
+
+/**
+ * Save the dynamic margin-rule set through the admin-only Cloud Function.
+ * The full set is validated server-side (overlaps, gaps, percentage bounds);
+ * invalid configurations are rejected.
+ */
+export async function saveMarginRulesAdmin(
+  input: { enabled?: boolean; rules: MarginRule[] },
+  updatedBy: string = 'admin'
+): Promise<{ success: boolean; enabled: boolean; rules: MarginRule[] }> {
+  const { httpsCallable } = await import('firebase/functions');
+  const { functions } = await import('@dabzzo/shared-auth');
+  const fn = httpsCallable<{ enabled?: boolean; rules: MarginRule[]; updatedBy: string }, any>(
+    functions,
+    'saveMarginRulesAdmin'
+  );
+  const result = await fn({
+    enabled: input?.enabled !== false,
+    rules: Array.isArray(input?.rules) ? input.rules : [],
+    updatedBy,
+  });
+  return result.data;
+}
 
 export const PRICING_RULES_DOC = {
   collection: 'system_settings',

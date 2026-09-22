@@ -53,6 +53,8 @@ export interface PricingRules {
   updatedAt?: any;
   updatedBy?: string;
   version?: string;
+  /** When a dynamic margin rule (quantity tier) was applied, its id is recorded here */
+  appliedMarginRuleId?: string;
 }
 
 export const DEFAULT_PRICING_RULES: PricingRules = {
@@ -621,11 +623,22 @@ export function calculateSubscriptionPrice(
   schedule: SubscriptionMealSlotInput[],
   defaultItems: SelectedItemInput[] | Record<string, number> = DEFAULT_STANDARD_MEAL.itemQuantities,
   catalog: ItemDefinition[] = DEFAULT_ITEM_CATALOG,
-  rules: PricingRules = DEFAULT_PRICING_RULES
+  rules: PricingRules = DEFAULT_PRICING_RULES,
+  marginRules?: MarginRule[]
 ): SubscriptionPricingBreakdown {
   if (!schedule || schedule.length === 0) {
     throw new Error('PricingEngine Error: Subscription schedule must have at least 1 meal selection.');
   }
+
+  // Resolve the dynamic margin tier for the whole subscription from its total meal count.
+  const totalMealsCount = schedule.reduce((acc: number, e) => {
+    if (!e) return acc;
+    if (e.slot === 'both') return acc + 2;
+    if (e.slot === 'lunch' || e.slot === 'dinner') return acc + 1;
+    return acc;
+  }, 0);
+  const effectiveRules: PricingRules =
+    totalMealsCount > 0 ? applyMarginRulesToRules(rules, marginRules, totalMealsCount) : rules;
 
   const mealDetails: SubscriptionPricingBreakdown['mealDetails'] = [];
 
@@ -648,7 +661,7 @@ export function calculateSubscriptionPrice(
     const slot = entry.slot;
     if (slot === 'lunch' || slot === 'dinner') {
       const itemsToPrice = entry.items || (slot === 'lunch' ? entry.lunchItems : entry.dinnerItems) || defaultItems;
-      const breakdown = calculateMealPrice(itemsToPrice, catalog, rules);
+      const breakdown = calculateMealPrice(itemsToPrice, catalog, effectiveRules);
 
       mealDetails.push({
         dayKey,
@@ -670,8 +683,8 @@ export function calculateSubscriptionPrice(
       const lunchItems = entry.lunchItems || entry.items || defaultItems;
       const dinnerItems = entry.dinnerItems || entry.items || defaultItems;
 
-      const lunchBreakdown = calculateMealPrice(lunchItems, catalog, rules);
-      const dinnerBreakdown = calculateMealPrice(dinnerItems, catalog, rules);
+      const lunchBreakdown = calculateMealPrice(lunchItems, catalog, effectiveRules);
+      const dinnerBreakdown = calculateMealPrice(dinnerItems, catalog, effectiveRules);
 
       mealDetails.push(
         { dayKey, slot: 'lunch', breakdown: lunchBreakdown },
@@ -708,36 +721,36 @@ export function calculateSubscriptionPrice(
   const margin = applyRounding(aggregateMargin);
   const foodSellingPrice = applyRounding(aggregateFoodSellingPrice);
   const deliveryCharge = applyRounding(aggregateDeliveryCharge);
-  const subtotal = applyRounding(aggregateSubtotal);
-  const finalPrice = applyRounding(aggregateFinalPrice, rules.roundingStrategy);
-  const paymentFee = applyRounding(finalPrice - subtotal);
+const subtotal = applyRounding(aggregateSubtotal);
+    const finalPrice = applyRounding(aggregateFinalPrice, effectiveRules.roundingStrategy);
+    const paymentFee = applyRounding(finalPrice - subtotal);
 
-  // Compute a snapshot of the base standard meal for reference
-  let standardMealUnitSnapshot: MealPricingBreakdown | undefined;
-  try {
-    standardMealUnitSnapshot = calculateMealPrice(DEFAULT_STANDARD_MEAL.itemQuantities, catalog, rules);
-  } catch {
-    // Non-fatal
-  }
+    // Compute a snapshot of the base standard meal for reference
+    let standardMealUnitSnapshot: MealPricingBreakdown | undefined;
+    try {
+      standardMealUnitSnapshot = calculateMealPrice(DEFAULT_STANDARD_MEAL.itemQuantities, catalog, effectiveRules);
+    } catch {
+      // Non-fatal
+    }
 
-  const snapshot: PricingSnapshot = {
-    snapshotVersion: rules.version || '2.0.0',
-    calculatedAt: new Date().toISOString(),
-    pricingRules: { ...rules },
-    totalMeals,
-    itemTotal,
-    vendorDeductionRate: rules.vendorDeduction,
-    vendorDeduction,
-    vendorCost,
-    marginRate: rules.margin,
+    const snapshot: PricingSnapshot = {
+      snapshotVersion: effectiveRules.version || '2.0.0',
+      calculatedAt: new Date().toISOString(),
+      pricingRules: { ...effectiveRules },
+      totalMeals,
+      itemTotal,
+      vendorDeductionRate: effectiveRules.vendorDeduction,
+      vendorDeduction,
+      vendorCost,
+      marginRate: effectiveRules.margin,
     margin,
     foodSellingPrice,
     deliveryCharge,
-    subtotal,
-    paymentFeeRate: rules.paymentFee,
-    paymentFee,
-    finalPrice,
-    standardMealUnitSnapshot,
+subtotal,
+      paymentFeeRate: effectiveRules.paymentFee,
+      paymentFee,
+      finalPrice,
+      standardMealUnitSnapshot,
     meals: mealDetails.map((m) => ({
       dayKey: m.dayKey,
       slot: m.slot,
@@ -761,7 +774,7 @@ export function calculateSubscriptionPrice(
     subtotal,
     paymentFee,
     finalPrice,
-    pricingRules: rules,
+    pricingRules: effectiveRules,
     snapshot,
   };
 }
@@ -774,56 +787,59 @@ export function calculateSubscriptionPrice(
  */
 export function calculateStandardSubscriptionProduct(
   totalMeals: number = 30,
-  rules: PricingRules = DEFAULT_PRICING_RULES
+  rules: PricingRules = DEFAULT_PRICING_RULES,
+  marginRules?: MarginRule[]
 ): SubscriptionPricingBreakdown {
+  const safeMeals = Math.max(1, Math.floor(Number(totalMeals) || 0));
+  const effectiveRules = applyMarginRulesToRules(rules, marginRules, safeMeals);
   const baseVendorTotal = 4000;
-  const vendorDeduction = applyRounding(baseVendorTotal * rules.vendorDeduction);
+  const vendorDeduction = applyRounding(baseVendorTotal * effectiveRules.vendorDeduction);
   const vendorCost = applyRounding(baseVendorTotal - vendorDeduction); // ₹3,680
   const finalCustomerPrice = 4500;
-  const deliveryCharge = applyRounding(rules.deliveryCharge * totalMeals);
+  const deliveryCharge = applyRounding(effectiveRules.deliveryCharge * safeMeals);
   const foodSellingPrice = applyRounding(finalCustomerPrice - deliveryCharge);
   const margin = applyRounding(foodSellingPrice - vendorCost);
   const subtotal = applyRounding(foodSellingPrice + deliveryCharge);
   const paymentFee = applyRounding(finalCustomerPrice - subtotal);
 
-  const dummySchedule: SubscriptionMealSlotInput[] = Array.from({ length: totalMeals }, (_, i) => ({
+  const dummySchedule: SubscriptionMealSlotInput[] = Array.from({ length: safeMeals }, (_, i) => ({
     dayKey: `day_${i + 1}`,
     slot: 'lunch',
   }));
 
-  const standardMeal = calculateMealPrice(DEFAULT_STANDARD_MEAL.itemQuantities, DEFAULT_ITEM_CATALOG, rules);
+  const standardMeal = calculateMealPrice(DEFAULT_STANDARD_MEAL.itemQuantities, DEFAULT_ITEM_CATALOG, effectiveRules);
 
   const snapshot: PricingSnapshot = {
-    snapshotVersion: rules.version || '2.0.0',
+    snapshotVersion: effectiveRules.version || '2.0.0',
     calculatedAt: new Date().toISOString(),
-    pricingRules: { ...rules },
-    totalMeals,
+    pricingRules: { ...effectiveRules },
+    totalMeals: safeMeals,
     itemTotal: baseVendorTotal,
-    vendorDeductionRate: rules.vendorDeduction,
+    vendorDeductionRate: effectiveRules.vendorDeduction,
     vendorDeduction,
     vendorCost,
-    marginRate: rules.margin,
+    marginRate: effectiveRules.margin,
     margin,
     foodSellingPrice,
     deliveryCharge,
     subtotal,
-    paymentFeeRate: rules.paymentFee,
+    paymentFeeRate: effectiveRules.paymentFee,
     paymentFee,
     finalPrice: finalCustomerPrice,
     standardMealUnitSnapshot: standardMeal,
     meals: dummySchedule.map((d) => ({
       dayKey: d.dayKey,
       slot: 'lunch' as const,
-      itemTotal: applyRounding(baseVendorTotal / totalMeals),
-      vendorCost: applyRounding(vendorCost / totalMeals),
-      finalPrice: applyRounding(finalCustomerPrice / totalMeals),
+      itemTotal: applyRounding(baseVendorTotal / safeMeals),
+      vendorCost: applyRounding(vendorCost / safeMeals),
+      finalPrice: applyRounding(finalCustomerPrice / safeMeals),
       manifest: standardMeal.manifestSummary,
       items: standardMeal.items,
     })),
   };
 
   return {
-    totalMeals,
+    totalMeals: safeMeals,
     mealDetails: dummySchedule.map((d) => ({
       dayKey: d.dayKey,
       slot: 'lunch' as const,
@@ -838,7 +854,7 @@ export function calculateStandardSubscriptionProduct(
     subtotal,
     paymentFee,
     finalPrice: finalCustomerPrice,
-    pricingRules: rules,
+    pricingRules: effectiveRules,
     snapshot,
   };
 }
@@ -1070,4 +1086,271 @@ export function calculateWeeklyPlanPrice(
     finalPrice,
     effectivePricePerMeal,
   };
+}
+
+// ─── 11. DYNAMIC MARGIN RULES (QUANTITY TIERS) ────────────────────────────────
+
+/**
+ * A fully configurable margin tier.
+ *
+ * Admin defines as many tiers as needed (no hardcoded ranges, percentages, or
+ * slab counts). Tiers tile the whole quantity axis: a rule with `maxMeals: null`
+ * is open-ended and must be the final active tier.
+ *
+ * Example:
+ *   { id: 'tier_a', minMeals: 1,  maxMeals: 9,   marginRate: 0.13, isActive: true }
+ *   { id: 'tier_b', minMeals: 10, maxMeals: 19,  marginRate: 0.12, isActive: true }
+ *   { id: 'tier_c', minMeals: 20, maxMeals: null, marginRate: 0.10, isActive: true }
+ */
+export interface MarginRule {
+  id: string;
+  /** First meal count this tier applies to (>= 1) */
+  minMeals: number;
+  /** Last meal count this tier applies to. null => open-ended (all counts >= minMeals) */
+  maxMeals: number | null;
+  /** Platform food margin fraction applied to this tier (0 <= rate < 1) */
+  marginRate: number;
+  isActive: boolean;
+  description?: string;
+}
+
+/** Firestore document shape stored at `system_settings/margin_rules`. */
+export interface MarginRulesConfig {
+  /** When false, tiering is disabled and the flat `PricingRules.margin` is used. */
+  enabled: boolean;
+  rules: MarginRule[];
+  version?: string;
+  updatedAt?: any;
+  updatedBy?: string;
+}
+
+export const DEFAULT_MARGIN_RULES_CONFIG: MarginRulesConfig = {
+  enabled: true,
+  rules: [],
+  version: '1.0.0',
+};
+
+/**
+ * Coerces an arbitrary Firestore/UI payload into a well-formed MarginRule.
+ * Returns null when the shape is unusable.
+ */
+export function normalizeMarginRule(raw: any): MarginRule | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const minMeals = Number(raw.minMeals);
+  if (!Number.isFinite(minMeals) || !Number.isInteger(minMeals) || minMeals < 1) return null;
+
+  const rawMax =
+    raw.maxMeals === null || raw.maxMeals === undefined || raw.maxMeals === ''
+      ? null
+      : Number(raw.maxMeals);
+  if (rawMax !== null && (!Number.isFinite(rawMax) || !Number.isInteger(rawMax) || rawMax < minMeals)) {
+    return null;
+  }
+
+  const marginRate = Number(raw.marginRate);
+  if (!Number.isFinite(marginRate) || marginRate < 0 || marginRate >= 1) return null;
+
+  const id =
+    typeof raw.id === 'string' && raw.id.trim()
+      ? raw.id.trim()
+      : `tier_${minMeals}_${rawMax === null ? 'max' : rawMax}`;
+
+  return {
+    id,
+    minMeals,
+    maxMeals: rawMax,
+    marginRate,
+    isActive: raw.isActive !== false,
+    description:
+      typeof raw.description === 'string' && raw.description.trim() ? raw.description.trim() : undefined,
+  };
+}
+
+/**
+ * Validates a margin-rule set. Rules must:
+ *  - have unique non-empty ids
+ *  - use integer meal counts with minMeals >= 1 and maxMeals >= minMeals (or null = open-ended)
+ *  - use margin fractions within [0, 1)
+ *  - among ACTIVE rules: tile [1, ∞) contiguously — no leading gap, no overlap, no inner gap,
+ *    exactly one open-ended rule, and that open-ended rule must be last.
+ *
+ * An empty or disabled set is valid (no tiering configured -> flat margin fallback).
+ * Returns an array of human-readable validation errors (empty = valid).
+ */
+export function validateMarginRuleSet(rules: MarginRule[]): string[] {
+  const errors: string[] = [];
+  if (!Array.isArray(rules)) {
+    errors.push('Margin rules must be an array.');
+    return errors;
+  }
+
+  const seenIds = new Set<string>();
+  rules.forEach((r, idx) => {
+    const at = `Rule at index ${idx}`;
+    if (!r || typeof r !== 'object') {
+      errors.push(`${at} is not a valid margin rule object.`);
+      return;
+    }
+    if (typeof r.id !== 'string' || !r.id.trim()) {
+      errors.push(`${at} must have a non-empty id.`);
+    } else if (seenIds.has(r.id.trim())) {
+      errors.push(`Duplicate margin rule id "${r.id.trim()}".`);
+    }
+    if (r.id && typeof r.id === 'string' && r.id.trim()) seenIds.add(r.id.trim());
+
+    if (!Number.isInteger(r.minMeals) || r.minMeals < 1) {
+      errors.push(`${at} must have an integer minMeals >= 1.`);
+    }
+    if (r.maxMeals !== null && (!Number.isInteger(r.maxMeals) || r.maxMeals < r.minMeals)) {
+      errors.push(`${at} must have a maxMeals (>= minMeals) or null for an open-ended tier.`);
+    }
+    if (!Number.isFinite(r.marginRate) || r.marginRate < 0 || r.marginRate >= 1) {
+      errors.push(`${at} must have a marginRate between 0% and 100%.`);
+    }
+  });
+
+  const active = rules
+    .filter((r) => r && r.isActive !== false)
+    .slice()
+    .sort((a, b) => a.minMeals - b.minMeals);
+
+  if (active.length === 0) {
+    return errors;
+  }
+
+  if (active[0].minMeals !== 1) {
+    errors.push(
+      `Margin tiers must start at 1 meal (first active tier starts at ${active[0].minMeals} meals).`
+    );
+  }
+
+  const openEnded = active.filter((r) => r.maxMeals === null);
+  if (openEnded.length > 1) {
+    errors.push('Only one open-ended tier (maxMeals = null) is allowed.');
+  }
+  if (openEnded.length === 1 && openEnded[0] !== active[active.length - 1]) {
+    errors.push('The open-ended tier (maxMeals = null) must be the final active tier.');
+  }
+
+  for (let i = 1; i < active.length; i++) {
+    const prev = active[i - 1];
+    const cur = active[i];
+    if (prev.maxMeals === null) {
+      errors.push(`Tier "${prev.id}" is open-ended and cannot be followed by tier "${cur.id}".`);
+      continue;
+    }
+    if (cur.minMeals <= prev.maxMeals) {
+      errors.push(
+        `Tier "${cur.id}" (${cur.minMeals}+) overlaps tier "${prev.id}" (up to ${prev.maxMeals} meals).`
+      );
+    } else if (cur.minMeals > prev.maxMeals + 1) {
+      errors.push(
+        `Gap between tier "${prev.id}" (ends at ${prev.maxMeals} meals) and tier "${cur.id}" (starts at ${cur.minMeals} meals).`
+      );
+    }
+  }
+
+  const last = active[active.length - 1];
+  if (last.maxMeals !== null) {
+    errors.push(
+      `Tiers leave meal counts above ${last.maxMeals} uncovered — add an open-ended final tier (maxMeals = null).`
+    );
+  }
+
+  return errors;
+}
+
+/**
+ * Resolves the margin fraction for a given meal count.
+ * Falls back to `fallbackRate` (typically `PricingRules.margin`) when no tiers
+ * are configured or no tier covers the count.
+ */
+export function resolveMarginRateForMeals(
+  marginRules: MarginRule[] | undefined,
+  totalMeals: number,
+  fallbackRate: number
+): { rate: number; ruleId: string | null } {
+  if (!Array.isArray(marginRules) || marginRules.length === 0) {
+    return { rate: fallbackRate, ruleId: null };
+  }
+  const mealCount = Number(totalMeals);
+  if (!Number.isFinite(mealCount) || mealCount < 1) {
+    return { rate: fallbackRate, ruleId: null };
+  }
+  const safeMeals = Math.floor(mealCount);
+  const fallback = Number.isFinite(fallbackRate) ? fallbackRate : DEFAULT_PRICING_RULES.margin;
+
+  const active = marginRules
+    .filter((r) => r && r.isActive !== false)
+    .slice()
+    .sort((a, b) => (a.minMeals - b.minMeals));
+
+  for (const r of active) {
+    if (r.maxMeals === null) {
+      if (safeMeals >= r.minMeals) {
+        return { rate: r.marginRate, ruleId: r.id };
+      }
+    } else if (safeMeals >= r.minMeals && safeMeals <= r.maxMeals) {
+      return { rate: r.marginRate, ruleId: r.id };
+    }
+  }
+  return { rate: fallback, ruleId: null };
+}
+
+/**
+ * Returns a copy of `rules` with the margin overridden by the tier matching
+ * `totalMeals`. When no tiers are configured (or none matches), the rules are
+ * returned unchanged. Records the matched tier id on `appliedMarginRuleId`.
+ */
+export function applyMarginRulesToRules(
+  rules: PricingRules,
+  marginRules: MarginRule[] | undefined,
+  totalMeals: number
+): PricingRules {
+  if (!rules || !Array.isArray(marginRules) || marginRules.length === 0 || totalMeals < 1) {
+    return rules;
+  }
+  const { rate, ruleId } = resolveMarginRateForMeals(marginRules, totalMeals, rules.margin);
+  const updated: PricingRules = { ...rules, margin: rate };
+  if (ruleId) updated.appliedMarginRuleId = ruleId;
+  return updated;
+}
+
+/**
+ * Fetches the dynamic margin rules from Firestore `system_settings/margin_rules`.
+ * Returns null when the document does not exist (callers fall back to the flat
+ * margin). Unusable entries are dropped defensively.
+ */
+export async function fetchAuthoritativeMarginRules(
+  db: admin.firestore.Firestore
+): Promise<MarginRulesConfig | null> {
+  try {
+    const snap = await db.collection('system_settings').doc('margin_rules').get();
+    if (!snap.exists) return null;
+    const data = snap.data();
+    if (!data) return null;
+
+    const rawRules = Array.isArray(data.rules) ? data.rules : [];
+    const rules: MarginRule[] = [];
+    const seen = new Set<string>();
+    for (const raw of rawRules) {
+      const normalized = normalizeMarginRule(raw);
+      if (!normalized) continue;
+      if (seen.has(normalized.id)) continue;
+      seen.add(normalized.id);
+      rules.push(normalized);
+    }
+
+    return {
+      enabled: data.enabled !== false,
+      rules,
+      version: typeof data.version === 'string' ? data.version : '1.0.0',
+      updatedAt: data.updatedAt,
+      updatedBy: data.updatedBy,
+    };
+  } catch (err) {
+    console.warn('[fetchAuthoritativeMarginRules] Error fetching margin rules, using none:', err);
+    return null;
+  }
 }

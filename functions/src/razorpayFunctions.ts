@@ -35,6 +35,8 @@ import {
   calculateStandardSubscriptionProduct,
   fetchAuthoritativePricingRules,
   fetchAuthoritativeItemsCatalog,
+  fetchAuthoritativeMarginRules,
+  applyMarginRulesToRules,
   DEFAULT_STANDARD_MEAL,
   SubscriptionMealSlotInput,
 } from './pricingEngine';
@@ -115,17 +117,19 @@ export async function resolveAuthoritativeOrderAmount(
   data: any,
   db: admin.firestore.Firestore
 ): Promise<{ amountPaise: number; authoritativePrice: number; rulesVersion: string } | null> {
-  const [rules, catalog] = await Promise.all([
+  const [rules, catalog, marginConfig] = await Promise.all([
     fetchAuthoritativePricingRules(db),
     fetchAuthoritativeItemsCatalog(db),
+    fetchAuthoritativeMarginRules(db),
   ]);
+  const marginRules = marginConfig?.enabled ? marginConfig.rules : undefined;
 
   const pattern = data?.pattern || data?.customPlanConfig?.pattern || data?.deliveryPattern;
   const rawSchedule = data?.schedule;
 
   // 1. Subscription with schedule array
   if (Array.isArray(rawSchedule) && rawSchedule.length > 0) {
-    const subPricing = calculateSubscriptionPrice(rawSchedule, DEFAULT_STANDARD_MEAL.itemQuantities, catalog, rules);
+    const subPricing = calculateSubscriptionPrice(rawSchedule, DEFAULT_STANDARD_MEAL.itemQuantities, catalog, rules, marginRules);
     return {
       amountPaise: Math.round(subPricing.finalPrice * 100),
       authoritativePrice: subPricing.finalPrice,
@@ -156,15 +160,10 @@ export async function resolveAuthoritativeOrderAmount(
       const planType = (data?.planType || data?.customPlanConfig?.planType || 'weekly').toLowerCase().trim();
       const effectiveRules =
         planType === 'weekly'
-          ? {
-              ...rules,
-              margin: 0.12,
-              paymentFee: 0.02,
-              planType: 'weekly' as const,
-            }
+          ? { ...rules, planType: 'weekly' as const }
           : rules;
 
-      const subPricing = calculateSubscriptionPrice(schedule, DEFAULT_STANDARD_MEAL.itemQuantities, catalog, effectiveRules);
+      const subPricing = calculateSubscriptionPrice(schedule, DEFAULT_STANDARD_MEAL.itemQuantities, catalog, effectiveRules, marginRules);
       return {
         amountPaise: Math.round(subPricing.finalPrice * 100),
         authoritativePrice: subPricing.finalPrice,
@@ -176,7 +175,8 @@ export async function resolveAuthoritativeOrderAmount(
   // 3. Single meal items
   const mealItems = data?.mealItems || data?.items || data?.components;
   if (mealItems && (Array.isArray(mealItems) || typeof mealItems === 'object')) {
-    const mealPricing = calculateMealPrice(mealItems, catalog, rules);
+    const effectiveMealRules = marginRules ? applyMarginRulesToRules(rules, marginRules, 1) : rules;
+    const mealPricing = calculateMealPrice(mealItems, catalog, effectiveMealRules);
     return {
       amountPaise: Math.round(mealPricing.finalPrice * 100),
       authoritativePrice: mealPricing.finalPrice,

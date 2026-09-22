@@ -497,6 +497,44 @@ await it('a vendor may not list subscriptions belonging to other customers', asy
     await assertFails(getDoc(doc(db, 'subscriptions', 'theirs')));
   });
 
+  // ── Dynamic Margin Rules (system_settings/margin_rules) ────────────────────
+  await it('anyone may read margin rules (public pricing config)', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'system_settings', 'margin_rules'), {
+        enabled: true,
+        rules: [{ id: 'tier_a', minMeals: 1, maxMeals: 9, marginRate: 0.13, isActive: true }],
+      });
+    });
+    const db = testEnv.authenticatedContext(CUSTOMER, customerClaims()).firestore();
+    await assertSucceeds(getDoc(doc(db, 'system_settings', 'margin_rules')));
+  });
+
+  await it('only admins may write margin rules (customers denied)', async () => {
+    await testEnv.clearFirestore();
+    const rules = [{ id: 'tier_a', minMeals: 1, maxMeals: null, marginRate: 0.12, isActive: true }];
+    const customerDb = testEnv.authenticatedContext(CUSTOMER, customerClaims()).firestore();
+    await assertFails(
+      setDoc(doc(customerDb, 'system_settings', 'margin_rules'), { enabled: true, rules })
+    );
+    const adminDb = testEnv.authenticatedContext(ADMIN, ADMIN_CLAIMS).firestore();
+    await assertSucceeds(
+      setDoc(doc(adminDb, 'system_settings', 'margin_rules'), { enabled: true, rules })
+    );
+  });
+
+  await it('a non-admin vendor cannot overwrite margin rules', async () => {
+    await testEnv.clearFirestore();
+    await seed(async (db) => {
+      await setDoc(doc(db, 'users', VENDOR), { role: 'vendor' });
+      await setDoc(doc(db, 'system_settings', 'margin_rules'), { enabled: true, rules: [] });
+    });
+    const db = testEnv.authenticatedContext(VENDOR, vendorClaims()).firestore();
+    await assertFails(
+      setDoc(doc(db, 'system_settings', 'margin_rules'), { enabled: true, rules: [{ id: 'x', minMeals: 1, maxMeals: null, marginRate: 0.1, isActive: true }] }, { merge: true })
+    );
+  });
+
   await testEnv.cleanup();
 
   // ── Report ────────────────────────────────────────────────────────────────

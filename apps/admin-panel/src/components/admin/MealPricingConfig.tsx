@@ -33,6 +33,10 @@ import {
   savePricingAlgorithmSettings,
   getAuthoritativePricingRules,
   saveAuthoritativePricingRules,
+  getMarginRules,
+  saveMarginRulesAdmin,
+  validateMarginRuleSet,
+  resolveMarginRateForMeals,
   calculateMealPrice,
   calculateSubscriptionPrice,
   calculateStandardSubscriptionProduct,
@@ -46,6 +50,7 @@ import {
   computeAlgorithmicMealPricing,
   PricingAlgorithmSettings,
   PricingRules,
+  MarginRule,
 } from '@/lib/queries/pricing';
 import {
   getMealComponentsCatalog,
@@ -89,6 +94,114 @@ export function MealPricingConfig({ onSaved, className = '' }: MealPricingConfig
   const [paymentFeePct, setPaymentFeePct] = useState<number>(2.5); // default 2.5% (0.025)
   const [roundingStrategy, setRoundingStrategy] = useState<'round' | 'ceil'>('round');
   const [savingRules, setSavingRules] = useState(false);
+
+  // ── Dynamic Margin Rules State (system_settings/margin_rules) ────────────────
+  interface MarginRuleDraft {
+    id: string;
+    minMeals: string;
+    maxMeals: string; // '' => open-ended (final tier only)
+    marginPct: string; // percent, e.g. 12.5
+    isActive: boolean;
+  }
+
+  const draftFromRule = (r: MarginRule): MarginRuleDraft => ({
+    id: r.id,
+    minMeals: String(r.minMeals),
+    maxMeals: r.maxMeals == null ? '' : String(r.maxMeals),
+    marginPct: String(Math.round(r.marginRate * 1000) / 10),
+    isActive: r.isActive !== false,
+  });
+
+  const [marginEnabled, setMarginEnabled] = useState(true);
+  const [marginDrafts, setMarginDrafts] = useState<MarginRuleDraft[]>([]);
+  const [initialMarginEnabled, setInitialMarginEnabled] = useState(true);
+  const [initialMarginDrafts, setInitialMarginDrafts] = useState<MarginRuleDraft[]>([]);
+  const [savingMarginRules, setSavingMarginRules] = useState(false);
+  const [marginPreviewMeals, setMarginPreviewMeals] = useState<number>(12);
+
+  const buildMarginRulesFromDrafts = (drafts: MarginRuleDraft[]): MarginRule[] => {
+    return drafts.map((d) => ({
+      id: d.id.trim() || `tier_${Math.random().toString(36).slice(2, 8)}`,
+      minMeals: Number(d.minMeals),
+      maxMeals: d.maxMeals.trim() === '' ? null : Number(d.maxMeals),
+      marginRate: (Number(d.marginPct) || 0) / 100,
+      isActive: d.isActive,
+    }));
+  };
+
+  const marginValidationErrors = useMemo(() => {
+    return validateMarginRuleSet(buildMarginRulesFromDrafts(marginDrafts).filter((r) => r.isActive !== false));
+  }, [marginDrafts]);
+
+  const isMarginChanged = useMemo(() => {
+    return (
+      marginEnabled !== initialMarginEnabled ||
+      JSON.stringify(marginDrafts) !== JSON.stringify(initialMarginDrafts)
+    );
+  }, [marginEnabled, marginDrafts, initialMarginEnabled, initialMarginDrafts]);
+
+  const resolvedPreviewMargin = useMemo(() => {
+    const tiers = buildMarginRulesFromDrafts(marginDrafts).filter((r) => r.isActive !== false);
+    return resolveMarginRateForMeals(tiers, marginPreviewMeals, Number(marginPct) / 100);
+  }, [marginDrafts, marginPreviewMeals, marginPct]);
+
+  const handleUpdateMarginDraft = (index: number, patch: Partial<MarginRuleDraft>) => {
+    setMarginDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)));
+  };
+
+  const handleAddMarginTier = () => {
+    const nextMin =
+      marginDrafts.length === 0
+        ? '1'
+        : String(
+            (Math.max(
+              ...marginDrafts.map((d) => (d.maxMeals.trim() === '' ? Number(d.minMeals) : Number(d.maxMeals) || Number(d.minMeals)))
+            ) || 0) + 1
+          );
+    setMarginDrafts((prev) => [
+      ...prev,
+      { id: '', minMeals: nextMin, maxMeals: '', marginPct: String(Math.round((Number(marginPct) || 0) * 10) / 10), isActive: true },
+    ]);
+  };
+
+  const handleSaveMarginRules = async () => {
+    const rules = buildMarginRulesFromDrafts(marginDrafts);
+
+    const hasMemberError = rules.some(
+      (r) => !Number.isInteger(r.minMeals) || r.minMeals < 1 || !Number.isFinite(r.marginRate) || r.marginRate < 0 || r.marginRate >= 1
+    );
+    if (hasMemberError) {
+      addToast('Every tier needs valid integer meal counts and a margin rate between 0% and 100%', 'error');
+      return;
+    }
+    const errors = validateMarginRuleSet(rules);
+    if (errors.length > 0) {
+      addToast(errors[0], 'error');
+      return;
+    }
+
+    setSavingMarginRules(true);
+    triggerHapticImpact(ImpactStyle.Medium);
+    try {
+      const updatedBy = user?.id || user?.email || 'admin';
+      const res = await saveMarginRulesAdmin({ enabled: marginEnabled, rules }, updatedBy);
+      setMarginEnabled(res.enabled);
+      setMarginDrafts(res.rules.map(draftFromRule));
+      setInitialMarginEnabled(res.enabled);
+      setInitialMarginDrafts(res.rules.map(draftFromRule));
+      addToast(
+        res.rules.length > 0
+          ? `Dynamic margin rules saved: ${res.rules.length} tier(s) active for meal counts 🎯`
+          : 'Dynamic margin rules saved — flat margin applies to all meal counts 🎯',
+        'success'
+      );
+    } catch (err: unknown) {
+      console.error('[MealPricingConfig] Error saving margin rules:', err);
+      addToast(getErrorMessage(err) || 'Failed to save margin rules', 'error');
+    } finally {
+      setSavingMarginRules(false);
+    }
+  };
 
   // Single meal interactive simulator item quantities (Default formula example = ₹78 Item Total)
   // Rice(15) + Dal(20) + Roti(8) + Sabji(25) + Salad(10) = 78
@@ -138,16 +251,23 @@ export function MealPricingConfig({ onSaved, className = '' }: MealPricingConfig
   const loadPricing = useCallback(async () => {
     setLoading(true);
     try {
-      const [{ weekly, monthly }, algo, rules] = await Promise.all([
+      const [{ weekly, monthly }, algo, rules, marginConfig] = await Promise.all([
         getAllPricingConfigs(),
         getPricingAlgorithmSettings(),
         getAuthoritativePricingRules(),
+        getMarginRules(),
       ]);
       setWeeklyConfig(weekly);
       setMonthlyConfig(monthly);
       setAlgoConfig(algo);
       setAuthoritativeRules(rules);
       setInitialAuthoritativeRules(rules);
+
+      const drafts = marginConfig.rules.map(draftFromRule);
+      setMarginEnabled(marginConfig.enabled !== false);
+      setMarginDrafts(drafts);
+      setInitialMarginEnabled(marginConfig.enabled !== false);
+      setInitialMarginDrafts(drafts);
 
       setWeeklyPrice(String(weekly.pricePerMeal ?? 50));
       setWeeklyVendorCost(String(weekly.vendorCostPerMeal ?? 30));
@@ -954,6 +1074,245 @@ export function MealPricingConfig({ onSaved, className = '' }: MealPricingConfig
               <span className="text-[10px] font-bold text-slate-400 uppercase">Dabzzo Gross Margin</span>
               <div className="text-base font-black text-emerald-700 mt-0.5">₹490</div>
               <div className="text-[10px] text-slate-500">Food margin + delivery recovery</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════════
+          SECTION: DYNAMIC MARGIN RULES (system_settings/margin_rules)
+      ══════════════════════════════════════════════════════════════ */}
+      <div className="bg-white rounded-3xl border border-slate-200/85 shadow-xs p-5 sm:p-7 space-y-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+          <div className="flex items-start gap-3.5">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-700 font-black shrink-0">
+              <Layers className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-lg font-black text-slate-900 leading-tight">
+                  Dynamic Margin Rules (Quantity Tiers)
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                  system_settings/margin_rules
+                </span>
+                {isMarginChanged && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 animate-pulse">
+                    Unsaved Margin Rule Edits
+                  </span>
+                )}
+              </div>
+              <p className="text-xs font-medium text-slate-500 mt-1">
+                Sliding platform margin by subscription meal count — the configuration-driven margin override.
+                Active tiers must cover <span className="font-mono font-bold text-slate-700">[1 meal → ∞)</span>{' '}
+                contiguously, and the final tier is open-ended. When no tier matches, the flat{' '}
+                <span className="font-mono font-bold text-orange-700">{marginPct}%</span> Platform Margin is used.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setMarginEnabled((v) => !v)}
+              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 ${
+                marginEnabled
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : 'bg-slate-100 text-slate-500 border border-slate-200'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${marginEnabled ? 'bg-emerald-600' : 'bg-slate-400'}`} />
+              {marginEnabled ? 'Enabled' : 'Disabled'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void handleSaveMarginRules()}
+              disabled={savingMarginRules || !isMarginChanged}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 flex items-center gap-2 shadow-xs ${
+                isMarginChanged
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              {savingMarginRules ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Saving…</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Save Margin Rules</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {!marginEnabled && (
+          <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/70 text-xs font-medium text-amber-900 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+            Margin tiers are currently disabled — the flat {marginPct}% Platform Margin is applied to every meal count.
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div className="grid grid-cols-12 gap-2 px-1 text-[10px] font-black uppercase tracking-wider text-slate-400">
+            <div className="col-span-2 sm:col-span-1">Active</div>
+            <div className="col-span-3 sm:col-span-2">Tier ID</div>
+            <div className="col-span-2 text-center">Min Meals</div>
+            <div className="col-span-2 text-center">Max Meals</div>
+            <div className="col-span-2 text-center">Margin</div>
+            <div className="col-span-1" />
+          </div>
+
+          {marginDrafts.length === 0 && (
+            <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50/60 text-center text-xs font-medium text-slate-500">
+              No tiers configured — the flat {marginPct}% platform margin applies to all meal counts. Add a tier to
+              enable quantity-based margins.
+            </div>
+          )}
+
+          {marginDrafts.map((d, i) => (
+            <div
+              key={i}
+              className="grid grid-cols-12 gap-2 items-center bg-slate-50/70 border border-slate-200 rounded-xl px-3 py-2.5"
+            >
+              <div className="col-span-2 sm:col-span-1">
+                <button
+                  type="button"
+                  onClick={() => handleUpdateMarginDraft(i, { isActive: !d.isActive })}
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center border transition-all active:scale-95 ${
+                    d.isActive
+                      ? 'bg-emerald-600 border-emerald-600 text-white'
+                      : 'bg-white border-slate-300 text-transparent'
+                  }`}
+                  title={d.isActive ? 'Active' : 'Disabled'}
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="col-span-3 sm:col-span-2">
+                <input
+                  type="text"
+                  value={d.id}
+                  onChange={(e) => handleUpdateMarginDraft(i, { id: e.target.value })}
+                  placeholder="tier_id"
+                  className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 outline-none focus:border-emerald-600"
+                />
+              </div>
+              <div className="col-span-2 text-center">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={d.minMeals}
+                  onChange={(e) => handleUpdateMarginDraft(i, { minMeals: e.target.value })}
+                  className="w-20 mx-auto px-1.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-center outline-none focus:border-emerald-600"
+                />
+              </div>
+              <div className="col-span-2 text-center">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={d.maxMeals}
+                  onChange={(e) => handleUpdateMarginDraft(i, { maxMeals: e.target.value })}
+                  placeholder="∞"
+                  className="w-20 mx-auto px-1.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-center outline-none focus:border-emerald-600"
+                />
+                {d.maxMeals.trim() === '' && (
+                  <span className="block text-[9px] font-bold text-emerald-700 mt-0.5">open-ended (final tier)</span>
+                )}
+              </div>
+              <div className="col-span-2 text-center relative">
+                <input
+                  type="number"
+                  min="0"
+                  max="99"
+                  step="0.5"
+                  value={d.marginPct}
+                  onChange={(e) => handleUpdateMarginDraft(i, { marginPct: e.target.value })}
+                  className="w-20 mx-auto pl-2 pr-5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-right outline-none focus:border-emerald-600"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">%</span>
+              </div>
+              <div className="col-span-1 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setMarginDrafts((prev) => prev.filter((_, idx) => idx !== i))}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                  title="Remove tier"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+
+          <button
+            type="button"
+            onClick={handleAddMarginTier}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-dashed border-emerald-400 text-emerald-700 hover:bg-emerald-50 text-xs font-black transition-all active:scale-95"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add Margin Tier
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 pt-1">
+          <div
+            className={`p-3.5 rounded-xl border text-xs ${
+              marginValidationErrors.length === 0
+                ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900'
+                : 'bg-rose-50 border-rose-200 text-rose-900'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 font-black uppercase tracking-wider text-[10px]">
+              {marginValidationErrors.length === 0 ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <X className="w-3.5 h-3.5 text-rose-600" />
+              )}
+              Config Validation
+            </div>
+            <div className="mt-1.5 font-medium">
+              {marginValidationErrors.length === 0 ? (
+                'Tiers tile [1 meal → ∞) contiguously — all meal counts covered.'
+              ) : (
+                marginValidationErrors.map((e, idx) => (
+                  <div key={idx} className="flex items-start gap-1.5">
+                    <span>•</span>
+                    <span>{e}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-black uppercase tracking-wider text-[10px] text-slate-500 flex items-center gap-1.5">
+                <Percent className="w-3.5 h-3.5" />
+                Resolved Margin Preview
+              </span>
+              <select
+                value={marginPreviewMeals}
+                onChange={(e) => setMarginPreviewMeals(Number(e.target.value))}
+                className="bg-white border border-slate-200 rounded px-1.5 py-0.5 font-black text-xs text-slate-800 outline-none"
+              >
+                {[1, 5, 7, 10, 12, 14, 20, 30, 60].map((m) => (
+                  <option key={m} value={m}>
+                    {m} meals
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="mt-1.5 font-black text-slate-900">
+              {marginEnabled && marginValidationErrors.length === 0 && resolvedPreviewMargin.ruleId
+                ? `${marginPreviewMeals} meals → ${(resolvedPreviewMargin.rate * 100).toFixed(1)}% margin (tier "${resolvedPreviewMargin.ruleId}")`
+                : `${marginPreviewMeals} meals → ${marginPct}% margin (flat Platform Margin)`}
             </div>
           </div>
         </div>

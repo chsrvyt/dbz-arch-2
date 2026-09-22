@@ -510,6 +510,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Dynamic margin rules (quantity tiers) — global admin config, public read
+    match /system_settings/margin_rules {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
     match /system_settings/{docId} {
       allow read: if true;
       allow write: if isAdmin();

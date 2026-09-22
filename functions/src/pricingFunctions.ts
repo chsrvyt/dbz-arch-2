@@ -6,6 +6,7 @@ import {
   calculateStandardSubscriptionProduct,
   fetchAuthoritativePricingRules,
   fetchAuthoritativeItemsCatalog,
+  fetchAuthoritativeMarginRules,
   DEFAULT_PRICING_RULES,
   DEFAULT_ITEM_CATALOG,
   DEFAULT_STANDARD_MEAL,
@@ -15,8 +16,15 @@ import {
   SubscriptionPricingBreakdown,
   SubscriptionMealSlotInput,
   PricingSnapshot,
+  MarginRule,
+  MarginRulesConfig,
+  normalizeMarginRule,
+  validateMarginRuleSet,
+  applyMarginRulesToRules,
+  resolveMarginRateForMeals,
   applyRounding,
 } from './pricingEngine';
+import { writeAuditLog } from './auditUtils';
 import { publishEvent } from './utils/events';
 
 export interface GetPricingConfigRequest {
@@ -33,6 +41,7 @@ export interface GetPricingConfigResponse {
   subtotal: number;
   itemTotal: number;
   pricingRules: PricingRules;
+  marginRules?: MarginRulesConfig | null;
   standardMeal: MealPricingBreakdown;
   itemsCatalog: ItemDefinition[];
   lastUpdatedAt: admin.firestore.Timestamp | any;
@@ -55,22 +64,21 @@ export const getPricingConfig = functions.https.onCall(
     const db = admin.firestore();
 
     try {
-      const [pricingRules, itemsCatalog] = await Promise.all([
+      const [pricingRules, itemsCatalog, marginConfig] = await Promise.all([
         fetchAuthoritativePricingRules(db),
         fetchAuthoritativeItemsCatalog(db),
+        fetchAuthoritativeMarginRules(db),
       ]);
 
-      // Calculate the standard meal breakdown authoritatively
-      // Calculate the standard meal breakdown authoritatively (with weekly plan rules if weekly)
-      const effectiveRules: PricingRules =
+      // Calculate the standard meal breakdown authoritatively (with weekly plan formula if weekly).
+      // Dynamic margin tiers are applied to the standard single-meal preview (1 meal).
+      const rawEffectiveRules: PricingRules =
         normalizedPlanType === 'weekly'
-          ? {
-              ...pricingRules,
-              margin: 0.12,
-              paymentFee: 0.02,
-              planType: 'weekly',
-            }
+          ? { ...pricingRules, planType: 'weekly' }
           : pricingRules;
+      const effectiveRules: PricingRules = marginConfig?.enabled
+        ? applyMarginRulesToRules(rawEffectiveRules, marginConfig.rules, 1)
+        : rawEffectiveRules;
 
       const standardMeal = calculateMealPrice(
         DEFAULT_STANDARD_MEAL.itemQuantities,
@@ -88,6 +96,7 @@ export const getPricingConfig = functions.https.onCall(
         subtotal: standardMeal.subtotal,
         itemTotal: standardMeal.itemTotal,
         pricingRules: effectiveRules,
+        marginRules: marginConfig,
         standardMeal,
         itemsCatalog,
         lastUpdatedAt: pricingRules.updatedAt || admin.firestore.Timestamp.now(),
@@ -120,20 +129,27 @@ export const calculatePricingPreview = functions.https.onCall(
     const db = admin.firestore();
 
     try {
-      const [rules, catalog] = await Promise.all([
+      const [rules, catalog, marginConfig] = await Promise.all([
         fetchAuthoritativePricingRules(db),
         fetchAuthoritativeItemsCatalog(db),
+        fetchAuthoritativeMarginRules(db),
       ]);
+
+      const marginRules = marginConfig?.enabled ? marginConfig.rules : undefined;
 
       // 1. Single meal preview
       if (data?.mealItems || data?.items || data?.components) {
         const rawItems = data.mealItems || data.items || data.components;
-        const breakdown = calculateMealPrice(rawItems, catalog, rules);
+        const effectiveMealRules = marginRules
+          ? applyMarginRulesToRules(rules, marginRules, 1)
+          : rules;
+        const breakdown = calculateMealPrice(rawItems, catalog, effectiveMealRules);
         return {
           success: true,
           mode: 'meal',
           breakdown,
-          rules,
+          rules: effectiveMealRules,
+          marginRules: marginConfig,
         };
       }
 
@@ -168,27 +184,33 @@ export const calculatePricingPreview = functions.https.onCall(
           schedule,
           DEFAULT_STANDARD_MEAL.itemQuantities,
           catalog,
-          rules
+          rules,
+          marginRules
         );
         return {
           success: true,
           mode: 'subscription',
           subPricing,
           rules,
+          marginRules: marginConfig,
         };
       }
 
       // 3. Fallback: Standard meal preview
+      const effectiveMealRules = marginRules
+        ? applyMarginRulesToRules(rules, marginRules, 1)
+        : rules;
       const standardBreakdown = calculateMealPrice(
         DEFAULT_STANDARD_MEAL.itemQuantities,
         catalog,
-        rules
+        effectiveMealRules
       );
       return {
         success: true,
         mode: 'standard',
         breakdown: standardBreakdown,
-        rules,
+        rules: effectiveMealRules,
+        marginRules: marginConfig,
       };
     } catch (err: any) {
       console.error('[calculatePricingPreview] Error:', err);
@@ -305,9 +327,10 @@ export const createCustomPlanSubscription = functions.https.onCall(
     const userData = userDocSnap.data() || {};
 
     // ── 2. Authoritative Pricing Engine Calculation ───────────────────────────
-    const [rules, catalog] = await Promise.all([
+    const [rules, catalog, marginConfig] = await Promise.all([
       fetchAuthoritativePricingRules(db),
       fetchAuthoritativeItemsCatalog(db),
+      fetchAuthoritativeMarginRules(db),
     ]);
 
     const slots = data?.custom_slots || data?.customSlots || {};
@@ -336,16 +359,14 @@ export const createCustomPlanSubscription = functions.https.onCall(
       );
     }
 
-    // Authoritative calculation from single backend pricing engine:
+    // Authoritative calculation from single backend pricing engine.
+    // Configuration-driven margin: tiers resolve by the subscription's total meal
+    // count; the flat `rules.margin` applies when no tiers are configured.
     const effectiveRules: PricingRules =
       planType === 'weekly'
-        ? {
-            ...rules,
-            margin: 0.12,
-            paymentFee: 0.02,
-            planType: 'weekly',
-          }
+        ? { ...rules, planType: 'weekly' }
         : rules;
+    const marginRules = marginConfig?.enabled ? marginConfig.rules : undefined;
 
     let subPricing: SubscriptionPricingBreakdown;
     try {
@@ -353,7 +374,8 @@ export const createCustomPlanSubscription = functions.https.onCall(
         schedule,
         DEFAULT_STANDARD_MEAL.itemQuantities,
         catalog,
-        effectiveRules
+        effectiveRules,
+        marginRules
       );
     } catch (calcErr: any) {
       console.error('[createCustomPlanSubscription] Pricing error:', calcErr);
@@ -726,6 +748,91 @@ export const savePricingRulesAdmin = functions.https.onCall(
       success: true,
       message: 'Global pricing rules updated successfully by Admin.',
       rules: updatedRules,
+    };
+  }
+);
+
+/**
+ * Cloud Function: saveMarginRulesAdmin
+ * Admin-only callable. Atomically replaces the dynamic margin-rule set stored at
+ * `system_settings/margin_rules`. The whole set is validated (overlaps, gaps,
+ * leading gap, unclosed tail, invalid percentages/ranges, duplicate ids) and
+ * invalid configurations are rejected — the engine only ever reads a valid set.
+ * Every successful change is recorded in the audit log.
+ */
+export const saveMarginRulesAdmin = functions.https.onCall(
+  async (data: any, context?: functions.https.CallableContext) => {
+    if (!context?.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated to save margin rules.');
+    }
+
+    const db = admin.firestore();
+    const userSnap = await db.collection('users').doc(context.auth.uid).get();
+    const userRole = userSnap.data()?.role;
+    if (context.auth.token?.role !== 'admin' && context.auth.token?.admin !== true && userRole !== 'admin') {
+      throw new functions.https.HttpsError('permission-denied', 'Only administrators can modify margin rules.');
+    }
+
+    const rawRules = data?.rules;
+    if (!Array.isArray(rawRules)) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'rules must be an array of margin rule objects.'
+      );
+    }
+
+    const enabled = data?.enabled !== false;
+    const normalized: MarginRule[] = [];
+    const invalid: string[] = [];
+    rawRules.forEach((raw: any, idx: number) => {
+      const rule = normalizeMarginRule(raw);
+      if (!rule) {
+        invalid.push(`Rule at index ${idx} is malformed (minMeals/maxMeals/marginRate range invalid).`);
+        return;
+      }
+      normalized.push(rule);
+    });
+
+    const validationErrors = validateMarginRuleSet(normalized);
+    const allErrors = [...invalid, ...validationErrors];
+    if (allErrors.length > 0) {
+      throw new functions.https.HttpsError('invalid-argument', allErrors.join(' '));
+    }
+
+    const docRef = db.collection('system_settings').doc('margin_rules');
+    await docRef.set(
+      {
+        enabled,
+        rules: normalized,
+        version: `1.${Date.now()}`,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedBy: context.auth.uid,
+      },
+      { merge: true }
+    );
+
+    await writeAuditLog(
+      {
+        action: 'UPDATE_MARGIN_RULES',
+        actorUid: context.auth.uid,
+        targetType: 'system_settings',
+        targetId: 'margin_rules',
+        result: 'success',
+        message: `Saved ${normalized.length} dynamic margin rule(s)${enabled ? '' : ' (disabled)'}.`,
+        metadata: {
+          enabled,
+          ruleIds: normalized.map((r) => r.id),
+          rules: normalized,
+        },
+      },
+      db
+    );
+
+    return {
+      success: true,
+      message: `Dynamic margin rules updated successfully by Admin (${normalized.length} tier${normalized.length === 1 ? '' : 's'}${enabled ? '' : ', disabled'}).`,
+      enabled,
+      rules: normalized,
     };
   }
 );
